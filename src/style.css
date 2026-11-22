@@ -170,3 +170,56 @@ html, body { height: 100%; overscroll-behavior: none; -webkit-touch-callout: non
   body.touch #events { bottom: calc(150px + env(safe-area-inset-bottom)); }
   .card.wide { max-height: 92vh; }
 }
+
+/* ---------- planetarium (sky) view ---------- */
+body.sky #panel, body.sky .take, body.sky #touch, body.sky #events { display: none !important; }
+#skyui { position: fixed; left: 0; right: 0; bottom: 0; z-index: 6; pointer-events: none;
+  padding: 0 max(14px, env(safe-area-inset-right)) max(14px, env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-left));
+  display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+#skyui > * { pointer-events: auto; }
+.sky-bar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.segctl { display: inline-flex; border: 1px solid var(--line); border-radius: 9px; overflow: hidden; }
+.segctl button { border: 0; border-radius: 0; background: rgba(28, 30, 34, 0.9); }
+.segctl button + button { border-left: 1px solid var(--line); }
+#skyui button.on, .segctl button.on { background: #2d4a7a; color: #e7efff; }
+#sky-readout { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 7px 11px; font-size: 12.5px;
+  line-height: 1.5; color: var(--ink); font-variant-numeric: tabular-nums; max-width: min(640px, 100%); }
+#sky-readout .dim { color: var(--dim); }
+#sky-labels-layer { position: fixed; inset: 0; pointer-events: none; z-index: 4; overflow: hidden; }
+.sky-label { position: absolute; left: 0; top: 0; font-size: 11.5px; color: #9fb8d8; margin: 6px 0 0 8px; white-space: nowrap;
+  text-shadow: 0 0 3px #000; letter-spacing: 0.02em; }
+.sky-label.planet { color: #e9c98a; }
+.sky-label.body { color: #fff3d6; font-weight: 600; }
+#aot-reticle { position: fixed; inset: 0; pointer-events: none; z-index: 3; display: grid; place-items: center; }
+#aot-reticle .ring { width: min(92vw, 92vh); aspect-ratio: 1; border-radius: 50%;
+  box-shadow: 0 0 0 200vmax #050506; position: relative;
+  background: linear-gradient(#7d1f1a, #7d1f1a) center / 1px 100% no-repeat, linear-gradient(#7d1f1a, #7d1f1a) center / 100% 1px no-repeat; }
+#ref-drawer { position: fixed; z-index: 8; right: max(14px, env(safe-area-inset-right)); top: calc(70px + env(safe-area-inset-top));
+  width: min(380px, calc(100% - 28px)); max-height: calc(100% - 140px); overflow: auto; background: var(--panel);
+  border: 1px solid var(--line); border-radius: 12px; padding: 12px; backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
+#ref-drawer .head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+#ref-drawer .small { color: var(--dim); font-size: 12px; margin: 6px 0 10px; }
+#ref-drawer .list { display: flex; flex-direction: column; gap: 8px; }
+.ref-card { display: flex; gap: 10px; align-items: center; text-align: left; padding: 6px; }
+.ref-card img { width: 72px; height: 72px; object-fit: cover; border-radius: 6px; flex: none; }
+.ref-card b { display: block; font-size: 13px; font-weight: 600; }
+.ref-card small { color: var(--dim); font-size: 11.5px; }
+#ref-inset { position: fixed; z-index: 7; right: max(14px, env(safe-area-inset-right)); top: calc(70px + env(safe-area-inset-top));
+  width: min(300px, 42vw); background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 8px; }
+#ref-inset img { width: 100%; display: block; border-radius: 6px; cursor: zoom-in; }
+#ref-inset .cap { font-size: 11.5px; line-height: 1.45; color: var(--ink); margin-top: 6px; }
+#ref-inset .cap small { color: var(--dim); }
+#ref-inset .close { position: absolute; top: 12px; right: 12px; padding: 2px 9px; }
+/* overlay mode: the photo fills the view, square like the 70 mm frame, semi-transparent for comparison */
+#ref-inset.overlay { inset: 0; width: auto; background: transparent; border: 0; padding: 0; display: grid; place-items: center; pointer-events: none; }
+#ref-inset.overlay img { width: min(100vw, 100vh); opacity: 0.5; pointer-events: auto; cursor: zoom-out; border-radius: 0; }
+#ref-inset.overlay .cap { display: none; }
+#ref-inset.overlay .close { pointer-events: auto; top: calc(70px + env(safe-area-inset-top)); right: 14px; }
+@media (max-width: 600px) {
+  #ref-inset:not(.overlay) { width: calc(100% - 28px); top: calc(84px + env(safe-area-inset-top)); display: flex; gap: 8px; align-items: flex-start; }
+  #sky-readout .desc { display: none; }
+  #ref-inset:not(.overlay) img { width: 96px; flex: none; }
+  #ref-inset:not(.overlay) .cap { margin: 0; padding-right: 28px; }
+  .sky-bar button { padding: 7px 10px; }
+  #sky-readout { font-size: 12px; }
+}

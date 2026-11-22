@@ -57,7 +57,7 @@ export class Hud {
     $('prog').textContent = d.program;
     $('btn-warp').textContent = `×${d.warp}`;
     $('btn-pause').textContent = d.paused ? '▶' : '❚❚';
-    $('btn-view').textContent = `View: ${d.view === 'chase' ? 'Chase' : d.view === 'cockpit' ? 'Interior' : 'Surface'}`;
+    $('btn-view').textContent = `View: ${d.view === 'chase' ? 'Chase' : d.view === 'cockpit' ? 'Interior' : d.view === 'sky' ? 'Sky' : 'Surface'}`;
     const altFt = d.altitude / FT;
     // DSKY
     $('d-prog').textContent = d.program;

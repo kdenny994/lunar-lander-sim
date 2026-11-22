@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import { FT, LM, MOON, SUBEARTH, SUBSOLAR } from './sim/constants';
+import { FT, LM, MOON } from './sim/constants';
+import { skyAt, planetsFromMoon, jdUTFromSimTime } from './sim/ephemeris';
 import { RenderFrame, enuAt, llrToVec, vecToLLR } from './sim/geo';
 import { TerrainData } from './sim/terrainData';
 import { Replay, type ReplaySample, type TrajectoryFile } from './sim/replay';
@@ -10,6 +11,8 @@ import { LMModel } from './render/lmModel';
 import { InputManager, type Action } from './ui/input';
 import { setupTouch } from './ui/touch';
 import { Hud } from './ui/hud';
+import { SkyRenderer, type SkyData } from './render/sky';
+import { SkyPanel, SENSORS, type RefPhoto } from './ui/skyPanel';
 
 const BASE = './data';
 const $ = (id: string) => document.getElementById(id)!;
@@ -18,7 +21,7 @@ const withTimeout = <T,>(p: Promise<T>, ms: number, what: string) =>
 const loadMsg = (m: string, frac?: number) => { $('ld-msg').textContent = m; if (frac !== undefined) ($('ld-bar') as HTMLElement).style.width = `${Math.round(frac * 100)}%`; };
 
 type Mode = 'replay' | 'flight';
-type View = 'chase' | 'cockpit' | 'ground';
+type View = 'chase' | 'cockpit' | 'ground' | 'sky';
 
 async function main() {
   loadMsg('Loading trajectory…', 0.02);
@@ -45,8 +48,10 @@ async function main() {
   scene.background = new THREE.Color(0x000000);
   const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.05, 4e6);
 
-  const sunDirW = llrToVec(SUBSOLAR.lat, SUBSOLAR.lon, 1); // MCMF unit
-  const earthDirW = llrToVec(SUBEARTH.lat, SUBEARTH.lon, 1);
+  // Sun and Earth directions (Moon-fixed) come from the ephemeris for the current mission time
+  let skyState = skyAt(0);
+  const sunDirW = skyState.sunDir.clone();
+  const earthDirW = skyState.earthDir.clone();
   const sun = new THREE.DirectionalLight(0xfff6ea, 3.2);
   sun.castShadow = true;
   sun.shadow.mapSize.setScalar(mobile ? 1024 : 2048);
@@ -56,9 +61,16 @@ async function main() {
   sc.left = -16; sc.right = 16; sc.top = 16; sc.bottom = -16;
   scene.add(sun, sun.target);
   scene.add(new THREE.AmbientLight(0x9fb4d0, 0.05)); // earthshine
-  // Earth: gibbous disc
-  const earth = makeEarth();
-  scene.add(earth);
+  // Sky: star catalogue, planets for the landing date, Sun and a textured Earth
+  loadMsg('Loading star catalogue and Earth…', 0.12);
+  let skyData: SkyData = { stars: [], named: [], lines: [] };
+  try { skyData = await withTimeout(fetch(`${BASE}/sky/sky.json`).then((r) => r.json()), 30000, 'star catalogue'); } catch (e) { console.error(e); }
+  let earthTex: THREE.Texture;
+  try { earthTex = await withTimeout(new THREE.TextureLoader().loadAsync(`${BASE}/sky/earth.jpg`), 30000, 'Earth map'); }
+  catch (e) { console.error(e); earthTex = new THREE.DataTexture(new Uint8Array([60, 100, 170, 255]), 1, 1); earthTex.needsUpdate = true; }
+  const planets = planetsFromMoon(jdUTFromSimTime(700) + 39.7 / 86400);
+  const sky = new SkyRenderer(skyData, planets, earthTex);
+  scene.add(sky.group);
 
   const terrainR = new TerrainRenderer(terrain, frame, `${BASE}/terrain`);
   terrainR.anisotropy = renderer.capabilities.getMaxAnisotropy();
@@ -131,7 +143,7 @@ async function main() {
   input.on((a: Action) => {
     switch (a) {
       case 'takeControl': if (mode === 'replay') setMode('flight'); else { tRail = Math.min(phys.t, replay.duration); setMode('replay'); } break;
-      case 'view': view = view === 'chase' ? 'cockpit' : view === 'cockpit' ? 'ground' : 'chase'; break;
+      case 'view': setView(view === 'chase' ? 'cockpit' : view === 'cockpit' ? 'ground' : view === 'ground' ? 'sky' : 'chase'); break;
       case 'pause': paused = !paused; break;
       case 'warpUp': warpI = Math.min(mode === 'flight' ? 2 : warps.length - 1, warpI + 1); break;
       case 'warpDown': warpI = Math.max(0, warpI - 1); break;
@@ -168,10 +180,49 @@ async function main() {
     ...traj.sources,
     (terrain.corridor.meta.source as string), (terrain.site.meta.source as string),
     'LM 3D model supplied by the project owner.',
+    'Sky: Sun and Moon from Meeus, Astronomical Algorithms (ch. 47); planets from JPL approximate Keplerian elements (Standish); lunar orientation from the IAU WGCCRE 2009 model; stars from the Hipparcos / Yale Bright Star catalogues via d3-celestial (BSD-3).',
+    'Earth: NASA Blue Marble (Visible Earth). Reference photos AS11-37-5458, AS11-44-6552, AS11-37-5437: NASA, images.nasa.gov.',
   ].map((s) => `• ${s}`).join('<br>');
 
   // ---------- camera controls (drag / wheel / pinch) ----------
   const camCtl = { az: Math.PI, el: 0.25, dist: window.innerWidth < window.innerHeight ? 46 : 28, lookYaw: 0, lookPitch: -0.55 };
+  // planetarium view: look direction in local ENU (az from north, el), vertical field of view in degrees
+  const skyCtl = { az: -Math.PI / 2, el: 0.75, fov: 60, eyeLogLa: -3, matchSquare: false };
+  const skyPanel = new SkyPanel();
+  function setView(v: View) {
+    view = v;
+    skyPanel.setVisible(v === 'sky');
+    if (v !== 'sky') skyCtl.matchSquare = false;
+  }
+  const lookAt = (dirW: THREE.Vector3) => {
+    const { e, n, u } = enuAt(disp.r);
+    skyCtl.az = Math.atan2(dirW.dot(e), dirW.dot(n));
+    skyCtl.el = Math.asin(Math.max(-1, Math.min(1, dirW.dot(u))));
+  };
+  skyPanel.onGoto = (w) => {
+    skyCtl.matchSquare = false;
+    if (w === 'earth') { lookAt(earthDirW); skyCtl.fov = Math.min(skyCtl.fov, 30); }
+    else if (w === 'sun') lookAt(sunDirW);
+    else { skyCtl.el = Math.PI / 2; skyCtl.fov = Math.max(skyCtl.fov, 90); }
+  };
+  skyPanel.onPhoto = (p: RefPhoto) => {
+    if (p.when === 'landed') restart(replay.duration, false);
+    else if (p.when === 'pdi') restart(0, false);
+    if (p.when !== 'now') paused = true;
+    skyPanel.setSensor(p.sensor);
+    skyCtl.fov = p.fov; skyCtl.matchSquare = true;
+    pendingLook = p;
+  };
+  let pendingLook: RefPhoto | null = null;
+  const applyPhotoLook = (p: RefPhoto) => {
+    if (p.look.kind === 'earth') { lookAt(earthDirW); return; }
+    const { e, n, u } = enuAt(disp.r);
+    const side = p.look.side * Math.PI / 180;
+    const w = new THREE.Vector3(0, Math.sin(side), Math.cos(side)).applyQuaternion(disp.q); // body +Z = windows, +Y = right
+    w.addScaledVector(u, -w.dot(u));
+    skyCtl.az = Math.atan2(w.dot(e), w.dot(n));
+    skyCtl.el = p.look.el * Math.PI / 180;
+  };
   const pointers = new Map<number, { x: number; y: number }>();
   let pinch0 = 0;
   renderer.domElement.addEventListener('pointerdown', (e) => { pointers.set(e.pointerId, { x: e.clientX, y: e.clientY }); renderer.domElement.setPointerCapture(e.pointerId); });
@@ -182,10 +233,16 @@ async function main() {
     if (pointers.size === 2) {
       const [a, b] = [...pointers.values()];
       const d = Math.hypot(a.x - b.x, a.y - b.y);
-      if (pinch0) camCtl.dist = Math.min(5000, Math.max(8, camCtl.dist * (pinch0 / d)));
+      if (pinch0) {
+        if (view === 'sky') skyCtl.fov = Math.min(100, Math.max(2, skyCtl.fov * (pinch0 / d)));
+        else camCtl.dist = Math.min(5000, Math.max(8, camCtl.dist * (pinch0 / d)));
+      }
       pinch0 = d; return;
     }
-    if (view === 'cockpit') {
+    if (view === 'sky') {
+      const k = (skyCtl.fov * Math.PI / 180) / window.innerHeight;
+      skyCtl.az -= dx * k; skyCtl.el = Math.max(-0.6, Math.min(Math.PI / 2, skyCtl.el + dy * k));
+    } else if (view === 'cockpit') {
       camCtl.lookYaw = Math.max(-1.2, Math.min(1.2, camCtl.lookYaw - dx * 0.004));
       camCtl.lookPitch = Math.max(-1.3, Math.min(0.6, camCtl.lookPitch - dy * 0.004));
     } else {
@@ -195,7 +252,7 @@ async function main() {
   const up = (e: PointerEvent) => { pointers.delete(e.pointerId); pinch0 = 0; };
   renderer.domElement.addEventListener('pointerup', up);
   renderer.domElement.addEventListener('pointercancel', up);
-  renderer.domElement.addEventListener('wheel', (e) => { camCtl.dist = Math.min(5000, Math.max(8, camCtl.dist * Math.exp(e.deltaY * 0.001))); e.preventDefault(); }, { passive: false });
+  renderer.domElement.addEventListener('wheel', (e) => { if (view === 'sky') { skyCtl.fov = Math.min(100, Math.max(2, skyCtl.fov * Math.exp(e.deltaY * 0.001))); e.preventDefault(); return; } camCtl.dist = Math.min(5000, Math.max(8, camCtl.dist * Math.exp(e.deltaY * 0.001))); e.preventDefault(); }, { passive: false });
   const onResize = () => {
     renderer.setSize(window.innerWidth, window.innerHeight);
     camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix();
@@ -218,7 +275,83 @@ async function main() {
   const tmp = new THREE.Vector3(), tmp2 = new THREE.Vector3();
   const qRender = new THREE.Quaternion();
   let physAcc = 0;
+  let skyT = -1e9;
   const PHYS_DT = 0.005;
+
+
+  // ---------- sky exposure: what the chosen sensor can detect ----------
+  let readoutT = 0;
+  const v3 = () => new THREE.Vector3();
+  function updateSkyExposure(dt: number, sunR: THREE.Vector3, upR: THREE.Vector3, altCG: number) {
+    const sensor = view === 'sky' ? skyPanel.sensor : 'eye';
+    const S = SENSORS[sensor];
+    const sunUp = sunR.dot(upR) > -0.005;
+    const fwd = v3().set(0, 0, -1).applyQuaternion(camera.quaternion);
+    const right = v3().set(1, 0, 0).applyQuaternion(camera.quaternion);
+    const camUp = v3().set(0, 1, 0).applyQuaternion(camera.quaternion);
+    // adaptation field: what is in view, never narrower than the eye's central +/-50 deg
+    const aspect = window.innerWidth / window.innerHeight;
+    const half = Math.min(80, Math.max(50, (camera.fov / 2) * Math.max(1, aspect)));
+    const sunAng = Math.acos(Math.max(-1, Math.min(1, fwd.dot(sunR)))) * 180 / Math.PI;
+    const dip = Math.acos(MOON.radius / (MOON.radius + Math.max(0, altCG) + 2));
+    const Lg = 0.12 * 127000 * Math.max(0, sunR.dot(upR)) / Math.PI; // sunlit regolith, cd/m^2
+    let sum = 0, n = 0;
+    const t = Math.tan(half * Math.PI / 180), d = v3();
+    for (let i = -3; i <= 3; i++) for (let j = -3; j <= 3; j++) {
+      d.copy(fwd).addScaledVector(right, (t * i) / 3).addScaledVector(camUp, (t * j) / 3).normalize();
+      if (Math.asin(d.dot(upR)) < -dip) sum += Lg;
+      n++;
+    }
+    let La = sum / n + (sunUp ? 0.3 : 0.001); // + sunlit cabin / visor scatter
+    if (sunUp && sunAng < half) La += 1.09e5 / (2 * Math.PI * (1 - Math.cos(half * Math.PI / 180))); // the solar disc itself
+    const target = Math.log10(La);
+    const tau = target > skyCtl.eyeLogLa ? 0.4 : 5; // light adaptation is fast, dark adaptation slow (time-compressed)
+    skyCtl.eyeLogLa += (target - skyCtl.eyeLogLa) * (1 - Math.exp(-dt / tau));
+    // glare only when the Sun is in, or just outside, the field actually in view (window frames and visors shade the rest)
+    const diagHalf = Math.atan(Math.tan(camera.fov * Math.PI / 360) * Math.hypot(1, aspect)) * 180 / Math.PI;
+    const glareField = sunUp ? Math.max(0, Math.min(1, (diagHalf + 10 - sunAng) / 15)) : 0;
+    sky.starMat.uniforms.uLa0.value = S.La0;
+    sky.setSensor({
+      lim0: S.lim0, slope: S.slope, La: sensor === 'eye' ? Math.pow(10, skyCtl.eyeLogLa) : 0,
+      glare: sensor === 'camera' ? 0 : glareField, aperture: S.aperture, spikes: S.spikes, glow: S.glow,
+    }, renderer.getPixelRatio());
+    sky.sun.visible = sunUp;
+
+    if (view !== 'sky') { skyPanel.drawLabels([], null); return; }
+    const { e: E, n: N } = enuAt(disp.r);
+    const eastR = frame.dir(E).normalize(), northR = frame.dir(N).normalize();
+    const azel = (dir: THREE.Vector3) => {
+      const az = (Math.atan2(dir.dot(eastR), dir.dot(northR)) * 180 / Math.PI + 360) % 360;
+      return { az, el: Math.asin(Math.max(-1, Math.min(1, dir.dot(upR)))) * 180 / Math.PI };
+    };
+    const eR = frame.dir(earthDirW).normalize();
+    const items: { name: string; dir: THREE.Vector3; cls?: string; always?: boolean }[] = [
+      { name: 'Sun', dir: sunR.clone().multiplyScalar(1000), cls: 'body', always: true },
+      { name: 'Earth', dir: eR.clone().multiplyScalar(1000), cls: 'body', always: true },
+    ];
+    for (const p of sky.planets) items.push({ name: p.name, dir: sky.toRender(p.dir).multiplyScalar(1000), cls: 'planet' });
+    for (const st of sky.named) items.push({ name: st.name, dir: sky.toRender(st.dir).multiplyScalar(1000) });
+    sky.lines.visible = skyPanel.labels;
+    skyPanel.drawLabels(items, camera);
+
+    readoutT -= dt;
+    if (readoutT > 0) return;
+    readoutT = 0.25;
+    const look = azel(fwd), sA = azel(sunR), eA = azel(eR);
+    const lim = sky.limitAt(fwd, sunR);
+    const lit = (1 + sunDirW.dot(v3().copy(earthDirW).negate())) / 2;
+    const adapting = sensor === 'eye' && Math.abs(target - skyCtl.eyeLogLa) > 0.3;
+    const utc = new Date((skyState.jdUT - 2440587.5) * 864e5).toISOString().replace('T', ' ').slice(0, 19);
+    const vis = sky.planets.map((p) => ({ p, a: azel(sky.toRender(p.dir)) })).filter((x) => x.a.el > 0)
+      .map((x) => `${x.p.name} ${x.p.mag >= 0 ? '+' : ''}${x.p.mag.toFixed(1)}`).join(', ');
+    skyPanel.readout(
+      `<b>${SENSORS[sensor].label}</b> <span class="dim desc">${SENSORS[sensor].desc}</span><br>` +
+      `Looking az ${look.az.toFixed(0)}° el ${look.el.toFixed(0)}° · field ${skyCtl.fov.toFixed(1)}° · ` +
+      `faintest star here ${lim < -5.5 ? 'none (sky records black)' : (lim >= 0 ? '+' : '') + lim.toFixed(1) + ' mag'}${adapting ? ' · <i>eye adapting</i>' : ''}<br>` +
+      `Sun el ${sA.el.toFixed(1)}° az ${sA.az.toFixed(0)}° · Earth el ${eA.el.toFixed(1)}° az ${eA.az.toFixed(0)}°, ${(lit * 100).toFixed(0)}% lit, ` +
+      `${(2 * Math.asin(6378.137 / skyState.earthDistKm) * 180 / Math.PI).toFixed(2)}° across<br>` +
+      `<span class="dim">${utc} UTC${vis ? ' · planets up: ' + vis : ''}</span>`);
+  }
 
   function frameLoop() {
     requestAnimationFrame(frameLoop);
@@ -271,6 +404,9 @@ async function main() {
     const altCG = r - ground;
     const altPads = altCG - LM.cgAboveFootpads;
 
+    // ---- ephemeris (Sun, Earth, sky orientation for the current mission time) ----
+    if (Math.abs(disp.t - skyT) > 1) { skyT = disp.t; skyState = skyAt(disp.t); sunDirW.copy(skyState.sunDir); earthDirW.copy(skyState.earthDir); }
+
     // ---- sun / shadow ----
     const sunR = frame.dir(sunDirW).normalize();
     const sinEl = Math.max(0.05, sunR.dot(upR));
@@ -286,7 +422,8 @@ async function main() {
     lm.updateDust(dt, altPads, disp.thrust, groundPt, upR);
 
     // ---- camera ----
-    lm.model.visible = view !== 'cockpit';
+    if (view === 'sky' && pendingLook) { applyPhotoLook(pendingLook); pendingLook = null; }
+    lm.model.visible = view !== 'cockpit' && view !== 'sky';
     $('cockpit').hidden = view !== 'cockpit';
     if (view === 'cockpit') {
       camera.fov = 62;
@@ -312,6 +449,20 @@ async function main() {
       if (camAlt < 1.6) camera.position.addScaledVector(upR, 1.6 - camAlt);
       camera.up.copy(upR);
       camera.lookAt(0, 0, 0);
+    } else if (view === 'sky') {
+      // planetarium: commander's eye position, free look over the whole sky
+      const aspect = window.innerWidth / window.innerHeight;
+      // a reference photo is square: make its field span the shorter screen side
+      camera.fov = skyCtl.matchSquare && aspect < 1 ? 2 * Math.atan(Math.tan(skyCtl.fov * Math.PI / 360) / aspect) * 180 / Math.PI : skyCtl.fov;
+      camera.position.copy(new THREE.Vector3(1.0, -0.55, 1.05).applyQuaternion(qRender));
+      const ca = Math.cos(skyCtl.el);
+      const look = northR.clone().multiplyScalar(Math.cos(skyCtl.az) * ca).addScaledVector(eastR, Math.sin(skyCtl.az) * ca).addScaledVector(upR, Math.sin(skyCtl.el));
+      // near the zenith keep "up" pointing away from the look azimuth so the view does not spin
+      const upHint = Math.abs(skyCtl.el) > 1.45
+        ? northR.clone().multiplyScalar(-Math.cos(skyCtl.az)).addScaledVector(eastR, -Math.sin(skyCtl.az))
+        : upR.clone();
+      camera.up.copy(upHint);
+      camera.lookAt(camera.position.clone().add(look));
     } else {
       // ground observer near Tranquility Base, 120 m south-west of the landing point
       camera.fov = 40;
@@ -324,11 +475,11 @@ async function main() {
     }
     camera.updateProjectionMatrix();
 
-    // earth sprite far away along its direction
+    // ---- sky: positions, then what a sensor could detect ----
+    camera.updateMatrixWorld();
     const eR = frame.dir(earthDirW).normalize();
-    earth.position.copy(camera.position).addScaledVector(eR, 3.0e5);
-    earth.lookAt(camera.position);
-    (earth.material as THREE.MeshBasicMaterial).needsUpdate = false;
+    sky.update(camera, frame, skyState, sunR, eR);
+    updateSkyExposure(dtReal, sunR, upR, altCG);
 
     terrainR.update(origin, camera.position);
     renderer.render(scene, camera);
@@ -371,7 +522,7 @@ async function main() {
   }
 
   frameLoop();
-  (window as any).__sim = { replay, phys, setMode, restart, get mode() { return mode; }, get t() { return disp.t; }, setView: (v: View) => { view = v; }, camCtl, renderer };
+  (window as any).__sim = { replay, phys, setMode, restart, get mode() { return mode; }, get t() { return disp.t; }, setView: (v: View) => setView(v), skyCtl, skyPanel, camCtl, renderer };
 }
 
 function fmtRate(v: number) { const f = v / FT; return `${f >= 0 ? '+' : ''}${f.toFixed(0)} ft/s`; }
@@ -389,26 +540,6 @@ function computeLPD(d: { r: THREE.Vector3; q: THREE.Quaternion }, traj: Trajecto
   const inv = d.q.clone().invert();
   const b = los.applyQuaternion(inv);
   return Math.atan2(-b.x, b.z) * 180 / Math.PI;
-}
-
-function makeEarth() {
-  const c = document.createElement('canvas'); c.width = c.height = 256;
-  const g = c.getContext('2d')!;
-  const grd = g.createRadialGradient(110, 110, 20, 128, 128, 126);
-  grd.addColorStop(0, '#d9ecff'); grd.addColorStop(0.5, '#5d8fd6'); grd.addColorStop(1, '#1d3c78');
-  g.fillStyle = grd; g.beginPath(); g.arc(128, 128, 124, 0, Math.PI * 2); g.fill();
-  g.fillStyle = 'rgba(255,255,255,0.55)';
-  for (let i = 0; i < 40; i++) { g.beginPath(); g.ellipse(40 + Math.random() * 180, 40 + Math.random() * 180, 8 + Math.random() * 30, 4 + Math.random() * 8, Math.random() * 3, 0, Math.PI * 2); g.fill(); }
-  // night side (gibbous, lit from the east)
-  g.globalCompositeOperation = 'source-atop';
-  g.fillStyle = 'rgba(0,0,0,0.92)';
-  g.beginPath(); g.ellipse(128 - 70, 128, 60, 124, 0, 0, Math.PI * 2); g.rect(0, 0, 0, 0); g.fill();
-  g.fillRect(0, 0, 4, 256);
-  const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
-  const size = 2 * 3.0e5 * Math.tan((0.95 * Math.PI) / 180);
-  const m = new THREE.Mesh(new THREE.PlaneGeometry(size, size), new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false, fog: false }));
-  m.renderOrder = -1;
-  return m;
 }
 
 main().catch((e) => { console.error(e); loadMsg(`Failed to start: ${e?.message ?? e}`); });

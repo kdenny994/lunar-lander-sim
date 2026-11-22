@@ -45,6 +45,21 @@
   </div>
 </header>
 
+
+<div id="sky-labels-layer"></div>
+<div id="aot-reticle" hidden><div class="ring"></div></div>
+<div id="skyui" hidden>
+  <div class="sky-bar">
+    <div class="segctl" id="sky-sensor"><button data-s="eye">Eye</button><button data-s="camera">Hasselblad</button><button data-s="aot">AOT</button></div>
+    <button id="sky-labels">Labels</button>
+    <button data-goto="earth">Earth</button><button data-goto="sun">Sun</button><button data-goto="zenith">Zenith</button>
+    <button id="sky-photos">Apollo photos</button>
+  </div>
+  <div id="sky-readout"></div>
+</div>
+<div id="ref-drawer" hidden><div class="head"><b>Apollo 11 reference photos</b><button class="close">Close</button></div><p class="small">Choosing a photo points the matching lens at the same part of the sky or surface, so you can compare the two.</p><div class="list"></div></div>
+<div id="ref-inset" hidden><img alt="Apollo 11 reference photo"><div class="cap"></div><button class="close" aria-label="Close photo">×</button></div>
+
 <div id="events"></div>
 
 <section id="panel">
@@ -102,6 +117,7 @@
       <p><b>R/F</b> rate-of-descent switch ±1 ft/s (P66) · <b>T</b> throttle mode (P66 auto / manual)</p>
       <p><b>Shift/Ctrl</b> manual throttle · <b>I/K J/L</b> RCS translation · <b>X</b> engine stop</p>
       <p>Drag to look around, wheel / pinch to zoom.</p>
+      <p><b>Sky view</b> (V until “View: Sky”): drag to look, pinch / wheel to zoom from 2° to 100°. <b>Eye</b> shows what a dark-adapting eye would see, <b>Hasselblad</b> the Apollo surface film exposure, <b>AOT</b> the alignment telescope.</p>
     </div>
     <div>
       <h3>Gamepad / joystick</h3>
