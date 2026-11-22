@@ -17,3 +17,4 @@ Run from the repository root. Raw downloads go to `data-raw/` (git-ignored, ~260
 6. `python3 tools/extract_p66_from_tm.py data-raw/refs/NASA-TM-20220007267_p26_fig14.svg data-raw/p66_tm.json`.
    The SVG comes from `pdftocairo -svg -f 30 -l 30 NASA-TM-20220007267.pdf`.
 7. `python3 tools/build_trajectory.py`: `public/data/apollo11_trajectory.json`.
+8. `python3 tools/pack_web.py`: packs heights into lossless RGB PNGs and the model into glTF JSON, so that any static host (including claude.ai artifacts) serves them. The `.bin` heights move to `data-raw/terrain/` for `npm test`.
