@@ -13,6 +13,8 @@ import { Hud } from './ui/hud';
 
 const BASE = './data';
 const $ = (id: string) => document.getElementById(id)!;
+const withTimeout = <T,>(p: Promise<T>, ms: number, what: string) =>
+  Promise.race([p, new Promise<T>((_, rej) => setTimeout(() => rej(new Error(`Timed out loading ${what}`)), ms))]);
 const loadMsg = (m: string, frac?: number) => { $('ld-msg').textContent = m; if (frac !== undefined) ($('ld-bar') as HTMLElement).style.width = `${Math.round(frac * 100)}%`; };
 
 type Mode = 'replay' | 'flight';
@@ -64,9 +66,17 @@ async function main() {
   const lm = new LMModel();
   scene.add(lm.body, lm.dustObject);
   loadMsg('Loading lunar module…', 0.15);
-  await lm.load('./models/apollo_lm.gltf.json', './draco/');
+  try {
+    await withTimeout(lm.load('./models/apollo_lm.gltf.json'), 45000, 'lunar module model');
+  } catch (e) {
+    console.error(e);
+    lm.addPlaceholder();
+    loadMsg('Lunar module model failed to load, using a simple stand-in.', 0.18);
+  }
   loadMsg('Loading LROC imagery…', 0.2);
-  await terrainR.loadTextures((d, n) => loadMsg(`Loading LROC imagery… ${d}/${n}`, 0.2 + 0.7 * (d / n)));
+  try {
+    await withTimeout(terrainR.loadTextures((d, n) => loadMsg(`Loading LROC imagery… ${d}/${n}`, 0.2 + 0.7 * (d / n))), 120000, 'LROC imagery');
+  } catch (e) { console.error(e); } // continue with whatever imagery arrived
 
   // ---------- simulation state ----------
   const input = new InputManager();

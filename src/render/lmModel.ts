@@ -1,7 +1,6 @@
 // Apollo LM model (user-supplied GLB), DPS exhaust glow and surface dust.
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
-import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
 import { LM } from '../sim/constants';
 
 export class LMModel {
@@ -47,9 +46,29 @@ export class LMModel {
 
   get dustObject() { return this.dust; }
 
-  async load(url: string, dracoPath: string) {
-    const draco = new DRACOLoader().setDecoderPath(dracoPath).setDecoderConfig({ type: 'js' }); // pure-JS decoder: no WebAssembly needed under strict CSPs
-    const gltf = await new GLTFLoader().setDRACOLoader(draco).loadAsync(url);
+  /** Simple stand-in LM (descent stage box, ascent stage, legs) used if the glTF can't load. */
+  addPlaceholder() {
+    const mat = new THREE.MeshStandardMaterial({ color: 0xb8a060, roughness: 0.6, metalness: 0.3 });
+    const grey = new THREE.MeshStandardMaterial({ color: 0x9a9a9a, roughness: 0.7 });
+    const g = new THREE.Group();
+    const desc = new THREE.Mesh(new THREE.BoxGeometry(4.2, 1.7, 4.2), mat); desc.position.y = 0.1; g.add(desc);
+    const asc = new THREE.Mesh(new THREE.CylinderGeometry(1.6, 1.9, 2.8, 8), grey); asc.position.y = 2.3; g.add(asc);
+    for (let i = 0; i < 4; i++) {
+      const a = (i * Math.PI) / 2 + Math.PI / 4;
+      const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 4.2), grey);
+      const fx = Math.cos(a) * 4.0, fz = Math.sin(a) * 4.0;
+      leg.position.set(fx * 0.7, -1.0, fz * 0.7);
+      leg.lookAt(fx, -LM.cgAboveFootpads, fz); leg.rotateX(Math.PI / 2);
+      g.add(leg);
+      const pad = new THREE.Mesh(new THREE.CylinderGeometry(0.47, 0.47, 0.1, 12), grey);
+      pad.position.set(fx, -LM.cgAboveFootpads + 0.05, fz); g.add(pad);
+    }
+    g.traverse((o) => { (o as THREE.Mesh).castShadow = true; });
+    this.model.add(g);
+  }
+
+  async load(url: string) {
+    const gltf = await new GLTFLoader().loadAsync(url);
     const root = gltf.scene;
     root.updateMatrixWorld(true);
     const box = new THREE.Box3().setFromObject(root);
@@ -70,7 +89,6 @@ export class LMModel {
       }
     });
     this.model.add(holder);
-    draco.dispose();
     return { scale: s, size };
   }
 
