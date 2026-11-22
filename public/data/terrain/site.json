@@ -1,0 +1,16 @@
+{
+ "width": 2042,
+ "height": 1668,
+ "lon0": 23.375145268437432,
+ "lat0": 0.7299655114092571,
+ "dlon": 6.596581934743514e-05,
+ "dlat": -6.595577243363591e-05,
+ "scale": 0.02,
+ "offset": -1967.0,
+ "chunkSamples": 256,
+ "chunkRows": 7,
+ "chunkCols": 8,
+ "lmLat": 0.67416,
+ "lmLon": 23.47314,
+ "source": "Heights: LROC NAC DTM Apollo 11 (NAC_DTM_APOLLO11, 2 m/post). Imagery: LROC NAC orthophoto M150361817 0.5 m (NASA/GSFC/ASU)."
+}

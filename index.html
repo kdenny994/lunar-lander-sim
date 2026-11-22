@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<title>Eagle Descent</title>
+<link rel="stylesheet" href="./src/style.css" />
+</head>
+<body>
+<div id="app"></div>
+
+<div id="cockpit" hidden>
+  <svg id="window-frame" viewBox="0 0 1000 1000" preserveAspectRatio="none">
+    <defs>
+      <mask id="win-mask">
+        <rect x="0" y="0" width="1000" height="1000" fill="white" />
+        <polygon id="win-poly" points="120,90 905,130 760,880 210,830" fill="black" />
+      </mask>
+    </defs>
+    <rect x="0" y="0" width="1000" height="1000" fill="#151514" mask="url(#win-mask)" />
+  </svg>
+  <div id="lpd"></div>
+</div>
+
+<header id="topbar">
+  <div class="clock">
+    <div><span class="lbl">GET</span> <span id="get">102:33:05</span></div>
+    <div><span class="lbl">PROG</span> <span id="prog">63</span> <span id="mode-badge" class="badge">REPLAY</span></div>
+  </div>
+  <nav class="buttons">
+    <button id="btn-start" title="Restart from a mission point">Start ▾</button>
+    <button id="btn-view" title="Interior / exterior view (V)">View: Chase</button>
+    <button id="btn-warp" title="Time warp (, .)">×1</button>
+    <button id="btn-pause" title="Pause (P)">❚❚</button>
+    <button id="btn-help" title="Controls and sources">?</button>
+  </nav>
+  <div id="start-menu" class="menu" hidden>
+    <button data-t="0">PDI · 102:33:05 · 48,800 ft</button>
+    <button data-t="386">Throttle recovery · 102:39:31</button>
+    <button data-t="507">P64 high gate · 102:41:32 · 7,500 ft</button>
+    <button data-t="600">Approach · 102:43:05 · 800 ft</button>
+    <button data-t="615">P66 manual · 102:43:20 · 410 ft</button>
+    <label class="chk"><input type="checkbox" id="start-manual" /> Start in manual control</label>
+  </div>
+</header>
+
+<div id="events"></div>
+
+<section id="panel">
+  <div class="dsky">
+    <div class="row"><span class="k">PROG</span><span id="d-prog" class="seg">63</span><span class="k">VERB</span><span class="seg">16</span><span class="k">NOUN</span><span id="d-noun" class="seg">63</span></div>
+    <div class="reg"><span id="r1l" class="rl">ΔH</span><span id="r1" class="seg">+00000</span></div>
+    <div class="reg"><span id="r2l" class="rl">H-DOT</span><span id="r2" class="seg">-0040</span></div>
+    <div class="reg"><span id="r3l" class="rl">H</span><span id="r3" class="seg">+48814</span></div>
+  </div>
+  <div class="gauges">
+    <div class="g"><span class="lbl">ALT</span><span id="g-alt">—</span></div>
+    <div class="g"><span class="lbl">ALT RATE</span><span id="g-hdot">—</span></div>
+    <div class="g"><span class="lbl">FWD VEL</span><span id="g-fwd">—</span></div>
+    <div class="g"><span class="lbl">LAT VEL</span><span id="g-lat">—</span></div>
+    <div class="g"><span class="lbl">THRUST</span><span id="g-thr">—</span></div>
+    <div class="g"><span class="lbl">DPS PROP</span><span id="g-prop">—</span></div>
+    <div class="g"><span class="lbl">RCS</span><span id="g-rcs">—</span></div>
+    <div class="g"><span class="lbl">PITCH</span><span id="g-pitch">—</span></div>
+    <div class="g"><span class="lbl">RANGE</span><span id="g-range">—</span></div>
+    <div class="g"><span class="lbl">THR MODE</span><span id="g-tmode">—</span></div>
+  </div>
+  <canvas id="xpointer" width="160" height="160" title="Cross pointer: forward/lateral velocity"></canvas>
+  <div class="lights">
+    <span id="l-contact" class="light">CONTACT</span>
+    <span id="l-alarm" class="light amber">PRG ALARM</span>
+    <span id="l-low" class="light amber">DES QTY</span>
+    <span id="l-eng" class="light green">ENG ARM</span>
+  </div>
+</section>
+
+<button id="btn-take" class="take">TAKE CONTROL</button>
+
+<div id="touch" hidden>
+  <div id="stick-l" class="stick"><div class="knob"></div><span>ACA pitch / roll</span></div>
+  <div class="touch-mid">
+    <button id="t-rodup">ROD ▲<small>less descent</small></button>
+    <button id="t-roddn">ROD ▼<small>more descent</small></button>
+    <button id="t-tmode">THR MODE</button>
+    <button id="t-stop">ENG STOP</button>
+  </div>
+  <div id="stick-r" class="stick"><div class="knob"></div><span>yaw ↔ · throttle ↕</span></div>
+</div>
+
+<div id="loading"><div class="ld-title">Eagle Descent</div><div id="ld-msg">Loading…</div><div class="bar"><div id="ld-bar"></div></div></div>
+
+<div id="result" class="modal" hidden><div class="card"><h2 id="res-title">Touchdown</h2><div id="res-body"></div><button id="res-close">Continue</button></div></div>
+
+<div id="help" class="modal" hidden><div class="card wide">
+  <h2>Controls</h2>
+  <div class="cols">
+    <div>
+      <h3>Keyboard</h3>
+      <p><b>Space</b> take control / back to replay · <b>V</b> view · <b>P</b> pause · <b>, .</b> time warp</p>
+      <p><b>W/S</b> pitch · <b>A/D</b> roll · <b>Q/E</b> yaw (rate command, attitude hold)</p>
+      <p><b>R/F</b> rate-of-descent switch ±1 ft/s (P66) · <b>T</b> throttle mode (P66 auto / manual)</p>
+      <p><b>Shift/Ctrl</b> manual throttle · <b>I/K J/L</b> RCS translation · <b>X</b> engine stop</p>
+      <p>Drag to look around, wheel / pinch to zoom.</p>
+    </div>
+    <div>
+      <h3>Gamepad / joystick</h3>
+      <p>Standard gamepad: left stick ACA, right stick X yaw, Y fore/aft translation, triggers throttle, d-pad ROD, bumpers lateral translation, A take control, Y view, X throttle mode, B engine stop.</p>
+      <p>Flight stick (HOTAS): roll/pitch, twist yaw, throttle lever, trigger take control, buttons 2/3 ROD.</p>
+      <h3>iPad</h3>
+      <p>Left pad: attitude. Right pad: yaw left/right, throttle up/down (manual mode). Buttons for ROD and engine stop.</p>
+    </div>
+  </div>
+  <h3>Data</h3>
+  <p class="small" id="credits"></p>
+  <button id="help-close">Close</button>
+</div></div>
+
+<script type="module" src="./src/main.ts"></script>
+</body>
+</html>

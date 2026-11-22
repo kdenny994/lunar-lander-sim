@@ -1,0 +1,23 @@
+{
+  "name": "lunar-lander-sim",
+  "version": "1.0.0",
+  "description": "",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc",
+    "test": "esbuild tests/sim.test.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/simtest.mjs --log-level=warning && node node_modules/.cache/simtest.mjs"
+  },
+  "dependencies": {
+    "three": "^0.170.0"
+  },
+  "devDependencies": {
+    "@types/three": "^0.170.0",
+    "esbuild": "^0.21.5",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.11"
+  },
+  "private": true,
+  "type": "module"
+}

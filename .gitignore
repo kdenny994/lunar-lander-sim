@@ -1,0 +1,6 @@
+node_modules
+dist
+data-raw/nac
+data-raw/wac_tiles
+data-raw/*.npz
+data-raw/*.png*

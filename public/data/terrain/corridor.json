@@ -1,0 +1,17 @@
+{
+ "width": 5376,
+ "height": 1024,
+ "lon0": 21.00195312600462,
+ "lat0": 2.4980468751195004,
+ "dlon": 0.003906250000186856,
+ "dlat": -0.003906250000186856,
+ "scale": 1.0,
+ "offset": 0.0,
+ "chunkDeg": 0.5,
+ "chunkRows": 7,
+ "chunkCols": 41,
+ "chunkLon0": 21.00195312600462,
+ "chunkLat0": 2.4980468751195004,
+ "texSize": 256,
+ "source": "Heights: LRO LOLA LDEM 118 m (USGS Astrogeology), NAC DTM blended inside site. Imagery: LROC WAC global mosaic (NASA/GSFC/ASU) via NASA Moon Trek."
+}
