@@ -120,7 +120,9 @@ for ri in range(nsr):
         px = (lons - o_lon_edge) / o_dlon - 0.5; py = (o_lat_edge - lats) / o_dlat - 0.5 - O_L0
         PY, PX = np.meshgrid(py, px, indexing="ij")
         img = map_coordinates(ortho, [PY, PX], order=1, mode="nearest")
-        Image.fromarray(np.clip(img, 0, 255).astype(np.uint8)).save(f"{OUT}/site/tex_{ri}_{ci}.jpg", quality=85)
+        im = Image.fromarray(np.clip(img, 0, 255).astype(np.uint8)); im.save(f"{OUT}/site/tex_{ri}_{ci}.jpg", quality=85)
+        os.makedirs(f"{OUT}/site_lo", exist_ok=True)  # quarter-res tier preloaded on every device
+        im.resize((max(32, tw // 4), max(32, th // 4)), Image.LANCZOS).save(f"{OUT}/site_lo/tex_{ri}_{ci}.jpg", quality=85)
 json.dump(dict(width=SW, height=SH, lon0=s_lon0, lat0=s_lat0, dlon=s_dlon, dlat=s_dlat, scale=sc, offset=off,
                chunkSamples=SCH, chunkRows=nsr, chunkCols=nsc,
                lmLat=LMLAT, lmLon=LMLON,

@@ -16,7 +16,7 @@ interface ChunkDef {
   isSite: boolean;
 }
 type Vector3d = THREE.Vector3;
-interface ChunkRec { def: ChunkDef; mesh: THREE.Mesh | null; geos: (THREE.BufferGeometry | null)[]; lod: number; mat: THREE.MeshLambertMaterial }
+interface ChunkRec { def: ChunkDef; mesh: THREE.Mesh | null; geos: (THREE.BufferGeometry | null)[]; lod: number; mat: THREE.MeshLambertMaterial; lo?: THREE.Texture; hi?: THREE.Texture | 'loading' }
 
 const RECT_SHADER_VERT_DECL = `
 attribute vec2 aLL;
@@ -97,11 +97,13 @@ export class TerrainRenderer {
     const total = this.chunks.length;
     this.pendingSiteTex = this.chunks.filter((c) => c.def.isSite).length;
     await Promise.all(this.chunks.map((c) => new Promise<void>((res) => {
-      this.loader.load(c.def.texUrl, (t) => {
+      const url = c.def.isSite ? c.def.texUrl.replace('/site/', '/site_lo/') : c.def.texUrl;
+      this.loader.load(url, (t) => {
         t.colorSpace = THREE.SRGBColorSpace;
         t.anisotropy = this.anisotropy;
         t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
         c.mat.map = t; c.mat.needsUpdate = true;
+        if (c.def.isSite) c.lo = t;
         if (c.def.isSite && --this.pendingSiteTex === 0) this.rect.uDiscard.value = 1;
         onProgress?.(++done, total); res();
       }, undefined, () => { onProgress?.(++done, total); res(); });
@@ -234,6 +236,7 @@ export class TerrainRenderer {
       }
       ch.mesh.visible = true;
       ch.mesh.position.copy(p);
+      if (ch.def.isSite && ch.lo) this.siteHiRes(ch, dist);
       if (!ch.geos[lod]) want.push({ ch, lod, dist });
       // use the finest available geometry that is not finer than wanted
       let use = lod;
@@ -249,6 +252,21 @@ export class TerrainRenderer {
       while (l > w.lod && w.ch.geos[l - 1]) l--;
       const target = Math.max(w.lod, l - 1);
       w.ch.geos[target] = this.buildGeometry(w.ch.def, w.ch.def.steps[target]);
+    }
+  }
+
+  /** Full 0.5 m imagery only near the camera; the quarter-res tier elsewhere keeps mobile GPU memory low. */
+  private siteHiRes(ch: ChunkRec, dist: number) {
+    if (dist < 2500 && !ch.hi) {
+      ch.hi = 'loading';
+      this.loader.load(ch.def.texUrl, (t) => {
+        if (ch.hi !== 'loading') { t.dispose(); return; }
+        t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = this.anisotropy; t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
+        ch.hi = t; ch.mat.map = t; ch.mat.needsUpdate = true;
+      }, undefined, () => { ch.hi = undefined; });
+    } else if (dist > 4500 && ch.hi) {
+      if (ch.hi !== 'loading') ch.hi.dispose();
+      ch.hi = undefined; ch.mat.map = ch.lo!; ch.mat.needsUpdate = true;
     }
   }
 

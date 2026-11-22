@@ -66,16 +66,42 @@ export class TerrainData {
   }
 }
 
-/** Heights are stored losslessly as RGB PNG: R = high byte, G = low byte of (value + 32768). */
+/**
+ * Heights are stored losslessly as RGB PNG: R = high byte, G = low byte of (value + 32768).
+ * Decoded in JS (zlib via DecompressionStream) so Safari's colour management can never alter the bytes.
+ */
 async function decodeHeightPng(blob: Blob, w: number, h: number): Promise<Int16Array> {
-  const bmp = await createImageBitmap(blob, { colorSpaceConversion: 'none', premultiplyAlpha: 'none' });
-  const canvas = document.createElement('canvas');
-  canvas.width = w; canvas.height = h;
-  const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
-  ctx.drawImage(bmp, 0, 0);
-  const px = ctx.getImageData(0, 0, w, h).data;
+  const buf = new Uint8Array(await blob.arrayBuffer());
+  const dv = new DataView(buf.buffer);
+  let p = 8, width = 0, height = 0, ctype = 0;
+  const idat: Uint8Array[] = [];
+  while (p < buf.length) {
+    const len = dv.getUint32(p); const type = String.fromCharCode(...buf.subarray(p + 4, p + 8));
+    const data = buf.subarray(p + 8, p + 8 + len);
+    if (type === 'IHDR') { width = dv.getUint32(p + 8); height = dv.getUint32(p + 12); ctype = buf[p + 17]; if (buf[p + 16] !== 8) throw new Error('PNG bit depth'); }
+    else if (type === 'IDAT') idat.push(data);
+    else if (type === 'IEND') break;
+    p += 12 + len;
+  }
+  if (width !== w || height !== h) throw new Error(`height map size ${width}x${height}, expected ${w}x${h}`);
+  const bpp = ctype === 2 ? 3 : ctype === 6 ? 4 : 0;
+  if (!bpp) throw new Error('PNG colour type');
+  const raw = new Uint8Array(await new Response(new Blob(idat as BlobPart[]).stream().pipeThrough(new DecompressionStream('deflate'))).arrayBuffer());
+  const stride = width * bpp;
   const out = new Int16Array(w * h);
-  for (let i = 0; i < w * h; i++) out[i] = ((px[i * 4] << 8) | px[i * 4 + 1]) - 32768;
-  bmp.close();
+  let prev = new Uint8Array(stride), cur = new Uint8Array(stride);
+  for (let y = 0; y < height; y++) {
+    const f = raw[y * (stride + 1)];
+    const line = raw.subarray(y * (stride + 1) + 1, (y + 1) * (stride + 1));
+    for (let i = 0; i < stride; i++) {
+      const a = i >= bpp ? cur[i - bpp] : 0, b = prev[i], c = i >= bpp ? prev[i - bpp] : 0;
+      let v = line[i];
+      if (f === 1) v += a; else if (f === 2) v += b; else if (f === 3) v += (a + b) >> 1;
+      else if (f === 4) { const pp = a + b - c, pa = Math.abs(pp - a), pb = Math.abs(pp - b), pc = Math.abs(pp - c); v += pa <= pb && pa <= pc ? a : pb <= pc ? b : c; }
+      cur[i] = v & 255;
+    }
+    for (let x = 0; x < width; x++) out[y * width + x] = ((cur[x * bpp] << 8) | cur[x * bpp + 1]) - 32768;
+    const t = prev; prev = cur; cur = t;
+  }
   return out;
 }
