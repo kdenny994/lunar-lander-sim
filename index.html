@@ -33,8 +33,16 @@
     <button id="btn-view" title="Interior / exterior view (V)">View: Chase</button>
     <button id="btn-warp" title="Time warp (, .)">×1</button>
     <button id="btn-pause" title="Pause (P)">❚❚</button>
+    <button id="btn-mission" title="Choose a different mission">Mission</button>
     <button id="btn-help" title="Controls and sources">?</button>
   </nav>
+  <div id="ss-start-menu" class="menu" hidden>
+    <button data-t="0">Descent orbit · coasting to ignition</button>
+    <button data-t="braking">Braking burn under way</button>
+    <button data-t="pitch">Pitch-up · 2 km above the rim</button>
+    <button data-t="final">Final 300 m</button>
+    <label class="chk"><input type="checkbox" id="ss-start-manual" /> Start in manual control</label>
+  </div>
   <div id="start-menu" class="menu" hidden>
     <button data-t="0">PDI · 102:33:05 · 48,800 ft</button>
     <button data-t="386">Throttle recovery · 102:39:31</button>
@@ -90,6 +98,24 @@
   </div>
 </section>
 
+<section id="ss-panel" hidden>
+  <div class="ss-status"><span id="ss-phase">COAST</span><span id="ss-status" class="dim"></span></div>
+  <div class="ss-engines"><span class="lbl">Raptors</span><span class="eng" id="ss-e0">1</span><span class="eng" id="ss-e1">2</span><span class="eng" id="ss-e2">3</span><span id="ss-esel" class="dim"></span></div>
+  <div class="gauges ss-g">
+    <div class="g"><span class="lbl">ALT</span><span id="s-alt">—</span></div>
+    <div class="g"><span class="lbl">V/S</span><span id="s-vs">—</span></div>
+    <div class="g"><span class="lbl">GND SPD</span><span id="s-hs">—</span></div>
+    <div class="g"><span class="lbl">RANGE</span><span id="s-range">—</span></div>
+    <div class="g"><span class="lbl">THROTTLE</span><span id="s-thr">—</span></div>
+    <div class="g"><span class="lbl">ACCEL</span><span id="s-acc">—</span></div>
+    <div class="g"><span class="lbl">MIN THRUST</span><span id="s-tw">—</span></div>
+    <div class="g"><span class="lbl">TILT</span><span id="s-tilt">—</span></div>
+    <div class="g"><span class="lbl">PROPELLANT</span><span id="s-prop">—</span></div>
+    <div class="g"><span class="lbl">MASS</span><span id="s-mass">—</span></div>
+  </div>
+  <div class="ss-dv"><span class="lbl">Ascent Δv left for 600 km orbit</span><div class="dvbar"><div id="s-dvbar"></div><i id="s-dvneed"></i></div><span id="s-dv">—</span></div>
+</section>
+
 <button id="btn-take" class="take">TAKE CONTROL</button>
 
 <div id="touch" hidden>
@@ -102,6 +128,20 @@
   </div>
   <div id="stick-r" class="stick"><div class="knob"></div><span>yaw ↔ · throttle ↕</span></div>
 </div>
+
+<div id="mission" class="modal" hidden><div class="card mission-card">
+  <h2>Choose a mission</h2>
+  <div class="missions">
+    <button class="mcard" data-m="apollo"><b>Apollo 11 · Tranquility Base</b><span>20 July 1969. Fly Eagle's powered descent on rails from the real trajectory, or take over in P66.</span></button>
+    <button class="mcard" data-m="starship"><b>Starship HLS · Shackleton rim</b><span>8 October 2028, 89.77° S. A 50 m lander on three inner Raptor 3 engines, from a 600 × 15 km descent orbit to a ridge beside Shackleton crater.</span></button>
+  </div>
+  <div id="ss-options">
+    <div class="opt"><span class="lbl">Braking engines</span><div class="segctl" id="ss-eng-choice"><button data-n="3">3</button><button data-n="2">2</button><button data-n="1">1</button></div></div>
+    <p class="small" id="ss-eng-note"></p>
+    <label class="chk"><input type="checkbox" id="ss-manual" /> Start in manual control (the guidance keeps flying until you take over otherwise)</label>
+  </div>
+  <button id="mission-go" class="go">Start</button>
+</div></div>
 
 <div id="loading"><div class="ld-title">Eagle Descent</div><div id="ld-msg">Loading…</div><div class="bar"><div id="ld-bar"></div></div></div>
 
@@ -127,9 +167,15 @@
       <p>Left pad: attitude. Right pad: yaw left/right, throttle up/down (manual mode). Buttons for ROD and engine stop.</p>
     </div>
   </div>
+  <div id="ss-help">
+  <h3>Starship HLS</h3>
+  <p><b>1 / 2 / 3</b> or <b>R / F</b> (gamepad d-pad, touch ENG +/−) choose how many of the three inner Raptors fire. With the guidance flying, that choice sets the braking engines (or the landing-burn engines once the ship has pitched up). In manual it is the live engine count. <b>T</b> switches the throttle between manual and the hoverslam autothrottle, <b>X</b> arms or safes the engines.</p>
+  <p>Even one Raptor at its 40 % minimum pushes the landed ship at about twice lunar gravity, so Starship cannot hover: every landing ends in a constant-deceleration “hoverslam” timed to reach 1 m/s at the pads.</p>
+  <div id="ss-budget" class="small"></div>
+  </div>
   <h3>Data</h3>
   <p class="small" id="credits"></p>
-  <button id="help-close">Close</button>
+  <div class="help-btns"><button id="help-mission">Choose another mission</button> <button id="help-close">Close</button></div>
 </div></div>
 
 <script type="module" src="./src/main.ts"></script>

@@ -1,0 +1,16 @@
+{
+ "width": 481,
+ "height": 1641,
+ "proj": "sps",
+ "x0": -24000.0,
+ "y0": 14000.0,
+ "dx": 100.0,
+ "dy": -100.0,
+ "scale": 0.25,
+ "offset": -1770.0,
+ "chunkSamples": 240,
+ "chunkRows": 7,
+ "chunkCols": 2,
+ "texSize": 1024,
+ "source": "Heights: LOLA 5 m south-pole DEM (Barker et al. 2021) to 100 km from the pole, LOLA 118 m global DEM beyond (USGS Astrogeology). Imagery: LROC NAC south-pole controlled mosaic (NASA/GSFC/ASU, USGS)."
+}

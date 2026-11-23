@@ -23,7 +23,7 @@ const loadMsg = (m: string, frac?: number) => { $('ld-msg').textContent = m; if 
 type Mode = 'replay' | 'flight';
 type View = 'chase' | 'cockpit' | 'ground' | 'sky';
 
-async function main() {
+async function apolloMain() {
   loadMsg('Loading trajectory…', 0.02);
   const traj: TrajectoryFile = await fetch(`${BASE}/apollo11_trajectory.json`).then((r) => r.json());
   const terrain = await TerrainData.load(`${BASE}/terrain`, (m) => loadMsg(m, 0.08));
@@ -542,4 +542,63 @@ function computeLPD(d: { r: THREE.Vector3; q: THREE.Quaternion }, traj: Trajecto
   return Math.atan2(-b.x, b.z) * 180 / Math.PI;
 }
 
-main().catch((e) => { console.error(e); loadMsg(`Failed to start: ${e?.message ?? e}`); });
+// ---------- boot: mission chooser ----------
+type Mission = 'apollo' | 'starship';
+const store = {
+  get(k: string) { try { return localStorage.getItem(k); } catch { return null; } },
+  set(k: string, v: string) { try { localStorage.setItem(k, v); } catch { /* storage unavailable */ } },
+};
+const ENG_NOTES: Record<number, string> = {
+  3: 'Three Raptors: the shortest, most efficient braking burn (ignition about 110 km out). Recommended.',
+  2: 'Two Raptors: ignition about 160 km out, a gentler burn that still lands on the target.',
+  1: 'One Raptor: 2.9 MN on a 450 t ship, so ignition comes about 320 km out and the burn takes about 7 minutes. Switching down to one engine mid-burn makes the guidance land long, downrange of the planned site.',
+};
+
+function startMission(m: Mission, ss?: { engines: number; manual: boolean }) {
+  $('mission').hidden = true;
+  $('loading').hidden = false;
+  const fail = (e: any) => { console.error(e); loadMsg(`Failed to start: ${e?.message ?? e}`); };
+  if (m === 'starship') {
+    document.body.classList.add('ss');
+    $('loading').querySelector('.ld-title')!.textContent = 'Starship HLS · Shackleton';
+    import('./starshipMain').then((mod) => mod.starshipMain(ss ?? { engines: 3, manual: false })).catch(fail);
+  } else {
+    apolloMain().catch(fail);
+  }
+}
+
+function boot() {
+  const chooseAgain = () => { location.hash = 'choose'; location.reload(); };
+  $('btn-mission').addEventListener('click', chooseAgain);
+  $('help-mission').addEventListener('click', chooseAgain);
+  const h = location.hash.slice(1);
+  let engines = Math.min(3, Math.max(1, Number(store.get('ss-engines')) || 3));
+  let manual = store.get('ss-manual') === '1';
+  if (h === 'apollo') return startMission('apollo');
+  if (h === 'starship') return startMission('starship', { engines, manual });
+
+  $('loading').hidden = true;
+  $('mission').hidden = false;
+  let mission: Mission = store.get('mission') === 'starship' ? 'starship' : 'apollo';
+  const cards = Array.from(document.querySelectorAll<HTMLButtonElement>('#mission .mcard'));
+  const engBtns = Array.from(document.querySelectorAll<HTMLButtonElement>('#ss-eng-choice button'));
+  const manualBox = $('ss-manual') as HTMLInputElement;
+  const paint = () => {
+    cards.forEach((c) => c.classList.toggle('on', c.dataset.m === mission));
+    $('ss-options').hidden = mission !== 'starship';
+    engBtns.forEach((b) => b.classList.toggle('on', Number(b.dataset.n) === engines));
+    $('ss-eng-note').textContent = ENG_NOTES[engines];
+    manualBox.checked = manual;
+  };
+  cards.forEach((c) => c.addEventListener('click', () => { mission = c.dataset.m as Mission; paint(); }));
+  cards.forEach((c) => c.addEventListener('dblclick', () => $('mission-go').click()));
+  engBtns.forEach((b) => b.addEventListener('click', () => { engines = Number(b.dataset.n); paint(); }));
+  manualBox.addEventListener('change', () => { manual = manualBox.checked; });
+  $('mission-go').addEventListener('click', () => {
+    store.set('mission', mission); store.set('ss-engines', String(engines)); store.set('ss-manual', manual ? '1' : '0');
+    history.replaceState(null, '', `#${mission}`);
+    startMission(mission, { engines, manual });
+  });
+  paint();
+}
+boot();

@@ -3,7 +3,7 @@ import type { PilotInput } from '../sim/dap';
 
 export type Action =
   | 'takeControl' | 'view' | 'pause' | 'rodUp' | 'rodDown' | 'throttleMode' | 'engineStop'
-  | 'warpUp' | 'warpDown' | 'restart';
+  | 'warpUp' | 'warpDown' | 'restart' | 'eng1' | 'eng2' | 'eng3';
 
 export class InputManager {
   readonly state: PilotInput = { pitch: 0, roll: 0, yaw: 0, throttle: 0.4, fwd: 0, right: 0, ullage: false };
@@ -33,6 +33,7 @@ export class InputManager {
     const map: Record<string, Action> = {
       Space: 'takeControl', KeyV: 'view', KeyP: 'pause', KeyR: 'rodUp', KeyF: 'rodDown', KeyT: 'throttleMode',
       KeyX: 'engineStop', Period: 'warpUp', Comma: 'warpDown', Backspace: 'restart',
+      Digit1: 'eng1', Digit2: 'eng2', Digit3: 'eng3', Numpad1: 'eng1', Numpad2: 'eng2', Numpad3: 'eng3',
     };
     const a = map[code];
     if (a) this.emit(a);
