@@ -298,3 +298,12 @@ body.sky #ss-panel { display: none !important; }
   body.ss #ss-phase, body.ss #ss-status { display: none; }
   #ss-panel, body.touch #ss-panel { transform: scale(0.66); }
 }
+.padmap { border-collapse: collapse; font-size: 13px; margin: 4px 0 6px; }
+.padmap td { padding: 2px 10px 2px 0; vertical-align: top; }
+.padmap td:first-child { color: var(--fg, #e8e6e1); font-weight: 600; white-space: nowrap; }
+.ss-pred { font-size: 12.5px; line-height: 1.45; color: #f2d9b8; border-left: 3px solid #ffa040; padding-left: 8px; }
+.ss-pred .lbl { display: block; }
+.ss-pred .warn { color: #ff8a7a; }
+.ss-engines .eng.tail { background: #3a2a22; color: #e0a080; border-color: #7a5040; }
+@media (max-width: 600px) { .ss-pred { font-size: 11px; } }
+body.cabin3d #window-frame { display: none; }

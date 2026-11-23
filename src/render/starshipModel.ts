@@ -1,9 +1,17 @@
-// Procedural Starship HLS: stainless hull with the white HLS upper section, solar array band, crew windows,
-// six landing legs, three sea-level Raptors (the ones the sim fires) and three vacuum Raptors (not used),
-// per-engine exhaust plumes. Built in a model frame with +Y along the hull, then mapped to the body frame
-// (+X nose) used by the flight model, with the CG at the origin.
+// Starship lander. The hull is the Ship stage of "SpaceX Starship Ship 24 & Booster 7 V4" by clarence365
+// (Sketchfab, CC-BY-4.0; tools/build_starship_model.mjs cuts it out of the full stack). Until that loads, or if it
+// fails, a procedural stand-in is shown: stainless hull, white HLS upper section, solar array band, crew windows,
+// three sea-level and three vacuum Raptors. Both carry the sim's six landing legs (extended to the pad circle) and
+// per-engine exhaust plumes. Built in a model frame with +Y along the hull, then mapped to the body frame (+X nose)
+// used by the flight model, with the CG at the origin.
 import * as THREE from 'three';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { SS, SS_ENGINES } from '../sim/starship';
+
+/** placement of the Sketchfab Ship in its own units (see tools/build_starship_model.mjs) */
+const GLB = { axisX: 0.037, axisZ: 0.031, radius: 0.86, baseY: 12.32 };
+/** the model's lowest point (aft skirt, vacuum bells) sits this far below the CG: 0.7 m above the pads */
+const GLB_BASE = -15.3;
 
 const BASE_Y = -14.6; // bottom of the aft skirt, m below the CG
 
@@ -12,6 +20,10 @@ export class StarshipModel {
   readonly body = new THREE.Group();
   readonly model = new THREE.Group();
   private plumes: THREE.Mesh[] = [];
+  /** procedural hull, engines and windows: replaced by the glTF ship once it loads */
+  private proc = new THREE.Group();
+  /** model-frame height of the inner engine nozzle exits */
+  private nozzleY = -SS.cgAboveEngines - 1.6;
   private cores: THREE.Mesh[] = [];
   /** where on the hull the crew window view sits (body frame) */
   readonly windowEye = new THREE.Vector3(26.2, 0, 4.9);
@@ -30,7 +42,10 @@ export class StarshipModel {
     const engineMat = new THREE.MeshStandardMaterial({ color: 0x6e6a66, metalness: 0.8, roughness: 0.45, side: THREE.DoubleSide });
     const legMat = new THREE.MeshStandardMaterial({ color: 0x8f9296, metalness: 0.7, roughness: 0.5 });
 
-    const add = (m: THREE.Mesh) => { m.castShadow = true; m.receiveShadow = true; this.model.add(m); return m; };
+    this.model.add(this.proc);
+    const addTo = (g: THREE.Object3D) => (m: THREE.Mesh) => { m.castShadow = true; m.receiveShadow = true; g.add(m); return m; };
+    const add = addTo(this.proc);
+    const addKeep = addTo(this.model);
     // hull: stainless lower section, white upper section (HLS thermal coating), ogive nose
     const yWhite = 17.5, yNose = 27.0, yTop = BASE_Y + SS.length;
     add(new THREE.Mesh(new THREE.CylinderGeometry(R, R, yWhite - BASE_Y, 48, 1, true), steel)).position.y = (yWhite + BASE_Y) / 2;
@@ -53,8 +68,8 @@ export class StarshipModel {
     lock.position.set(0, 9.0, R + 0.03);
     // aft dome and skirt ring
     const dome = add(new THREE.Mesh(new THREE.CircleGeometry(R, 48), black)); dome.rotation.x = Math.PI / 2; dome.position.y = BASE_Y + 0.6;
-    add(new THREE.Mesh(new THREE.TorusGeometry(R, 0.12, 6, 48), steel)).rotation.x = Math.PI / 2;
-    this.model.children[this.model.children.length - 1].position.y = BASE_Y;
+    const ring = add(new THREE.Mesh(new THREE.TorusGeometry(R, 0.12, 6, 48), steel));
+    ring.rotation.x = Math.PI / 2; ring.position.y = BASE_Y;
 
     // engines: 3 sea-level Raptors (inner) and 3 vacuum Raptors (outer, not fired)
     const bell = (rExit: number, len: number) => {
@@ -83,11 +98,11 @@ export class StarshipModel {
       const px = -Math.cos(a) * SS.padRadius, pz = Math.sin(a) * SS.padRadius;
       const top = new THREE.Vector3(-Math.cos(a) * (R - 0.2), BASE_Y + 4.5, Math.sin(a) * (R - 0.2));
       const foot = new THREE.Vector3(px, -SS.cgAbovePads + 0.35, pz);
-      const leg = add(new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.3, 1, 10), legMat));
+      const leg = addKeep(new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.3, 1, 10), legMat));
       leg.position.copy(top).add(foot).multiplyScalar(0.5);
       leg.scale.y = top.distanceTo(foot);
       leg.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), top.clone().sub(foot).normalize());
-      const pad = add(new THREE.Mesh(new THREE.CylinderGeometry(0.9, 0.95, 0.3, 16), legMat));
+      const pad = addKeep(new THREE.Mesh(new THREE.CylinderGeometry(0.9, 0.95, 0.3, 16), legMat));
       pad.position.set(px, -SS.cgAbovePads + 0.15, pz);
     }
 
@@ -105,6 +120,40 @@ export class StarshipModel {
       const c = new THREE.Mesh(core, cm);
       c.position.copy(p.position);
       this.model.add(c); this.cores.push(c);
+    }
+  }
+
+  /** Swap the procedural hull for the glTF Ship. Resolves false (stand-in kept) if it cannot be loaded. */
+  async loadShip(url: string): Promise<boolean> {
+    try {
+      const gltf = await new GLTFLoader().loadAsync(url);
+      const g = gltf.scene;
+      const k = (SS.diameter / 2) / GLB.radius;
+      // rotate half a turn so its three inner Raptors line up with the sim's engine positions
+      const holder = new THREE.Group();
+      holder.rotation.y = Math.PI;
+      holder.scale.setScalar(k);
+      holder.position.y = GLB_BASE - GLB.baseY * k;
+      g.position.set(-GLB.axisX, 0, -GLB.axisZ);
+      holder.add(g);
+      g.traverse((o) => {
+        const m = o as THREE.Mesh;
+        if (!m.isMesh) return;
+        m.castShadow = true; m.receiveShadow = true;
+        // no environment map out here: tone the mirror-like steel down so the sunlit side reads as metal, not black
+        for (const mat of (Array.isArray(m.material) ? m.material : [m.material]) as THREE.MeshStandardMaterial[]) {
+          if (mat.metalness !== undefined) { mat.metalness = Math.min(mat.metalness, 0.55); mat.roughness = Math.max(mat.roughness, 0.35); }
+        }
+      });
+      this.model.remove(this.proc);
+      this.model.add(holder);
+      // plumes start at the inner bell exits: 0.09 model units above the base
+      this.nozzleY = GLB_BASE + 0.09 * k;
+      for (let i = 0; i < 3; i++) { this.plumes[i].position.y = this.nozzleY; this.cores[i].position.y = this.nozzleY; }
+      return true;
+    } catch (e) {
+      console.warn('Starship model failed to load, keeping the stand-in', e);
+      return false;
     }
   }
 

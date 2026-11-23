@@ -16,9 +16,14 @@ export const SS = {
   raptorThrustVac: 2.88e6, // N, Raptor 3 sea-level nozzle in vacuum (estimate)
   raptorIsp: 350, // s, vacuum
   minThrottle: 0.4,
-  engineLag: 0.35, // s, throttle response
-  engineStart: 2.0, // s, start-up to minimum throttle
-  engineRadius: 1.3, // m, inner engines from the axis
+  engineLag: 0.35, // s, throttle response while running
+  // Raptor start and shutdown (public figures and estimates; SpaceX has not published Raptor 3 transients):
+  engineSpin: 0.9, // s, start command to ignition: chill-down purge and spin start, no thrust
+  engineStart: 2.0, // s, start command to minimum throttle (ignition, then thrust ramp)
+  shutdownTau: 0.15, // s, thrust tail-off time constant after cutoff (thrust < 1 % after ~0.7 s)
+  startProp: 150, // kg, propellant used by one start (chill-down bleed and spin start) without useful thrust
+  shutdownProp: 50, // kg, propellant purged from the engine and lines at each shutdown
+  engineRadius: 0.9, // m, inner engines from the axis (as on the 3D model)
   gimbalMax: 15 * Math.PI / 180,
   cgAboveEngines: 14.0, // m, gimbal plane below the CG (lightly loaded lander)
   cgAbovePads: 16.0, // m
@@ -97,6 +102,8 @@ export const SS_ENGINES: Vector3[] = [0, 1, 2].map((i) => {
   return new Vector3(-SS.cgAboveEngines, Math.cos(a) * SS.engineRadius, Math.sin(a) * SS.engineRadius);
 });
 
+export type EngPhase = 'off' | 'start' | 'run' | 'shutdown';
+
 export class SSState {
   r = new Vector3();
   v = new Vector3();
@@ -108,6 +115,15 @@ export class SSState {
   eng = [0, 0, 0];
   engStart = [0, 0, 0];
   engOn = [false, false, false];
+  /** engine sequence: off, starting (spin + ramp), running, shutting down (tail-off) */
+  engPhase: EngPhase[] = ['off', 'off', 'off'];
+  /** a start was requested while that engine was still shutting down: begins when the tail-off ends */
+  engQueued = [false, false, false];
+  starts = 0;
+  /** propellant spent by starts and shutdowns (kg), already taken out of prop */
+  transientProp = 0;
+  /** impulse delivered during shutdown tail-offs (N s) */
+  tailImpulse = 0;
   t = 0;
   touchdown: null | { vVert: number; vHorz: number; tilt: number; t: number } = null;
   padsDown = 0;
@@ -138,22 +154,46 @@ export function gimbalAuthority(s: SSState) {
 }
 
 export function stepStarship(s: SSState, c: SSControls, dt: number, terrain: TerrainData) {
-  if (s.landed) { s.t += dt; s.v.set(0, 0, 0); s.w.set(0, 0, 0); s.eng = [0, 0, 0]; s.engOn = [false, false, false]; return; }
+  if (s.landed) { s.t += dt; s.v.set(0, 0, 0); s.w.set(0, 0, 0); s.eng = [0, 0, 0]; s.engOn = [false, false, false]; s.engPhase = ['off', 'off', 'off']; return; }
   const m = s.mass;
-  // ---- engines: the first n are commanded on; start-up delay, then first-order throttle response ----
+  // ---- engines: the first n are commanded on. Each runs its own sequence:
+  //   start:    spin start and chill purge (no thrust) for engineSpin, then a thrust ramp to minimum throttle at engineStart
+  //   run:      first-order throttle response (engineLag)
+  //   shutdown: exponential thrust tail-off (shutdownTau); a restart has to wait for it to finish
   const want = s.prop > 0 ? Math.max(0, Math.min(3, Math.round(c.engines))) : 0;
   const thr = Math.min(1, Math.max(SS.minThrottle, c.throttle));
   for (let i = 0; i < 3; i++) {
     const on = i < want;
-    if (on && !s.engOn[i]) { s.engOn[i] = true; s.engStart[i] = 0; }
-    if (!on) s.engOn[i] = false;
-    let target = 0;
-    if (s.engOn[i]) {
-      s.engStart[i] += dt;
-      target = s.engStart[i] < SS.engineStart ? SS.minThrottle * (s.engStart[i] / SS.engineStart) : thr;
+    const ph = s.engPhase[i];
+    if (on && (ph === 'off' || (ph === 'shutdown' && s.engQueued[i] && s.eng[i] < 0.01))) {
+      s.engPhase[i] = 'start'; s.engStart[i] = 0; s.engQueued[i] = false; s.starts++;
+      const dm = Math.min(s.prop, SS.startProp); s.prop -= dm; s.transientProp += dm;
+    } else if (on && ph === 'shutdown') s.engQueued[i] = true;
+    else if (!on && (ph === 'start' || ph === 'run')) {
+      s.engPhase[i] = 'shutdown'; s.engQueued[i] = false;
+      const dm = Math.min(s.prop, SS.shutdownProp); s.prop -= dm; s.transientProp += dm;
+    } else if (!on) s.engQueued[i] = false;
+    s.engOn[i] = s.engPhase[i] === 'start' || s.engPhase[i] === 'run';
+    switch (s.engPhase[i]) {
+      case 'start': {
+        s.engStart[i] += dt;
+        const k = (s.engStart[i] - SS.engineSpin) / (SS.engineStart - SS.engineSpin);
+        s.eng[i] = k <= 0 ? 0 : SS.minThrottle * Math.min(1, k);
+        if (s.engStart[i] >= SS.engineStart) s.engPhase[i] = 'run';
+        break;
+      }
+      case 'run':
+        s.engStart[i] += dt;
+        s.eng[i] += (thr - s.eng[i]) * Math.min(1, dt / SS.engineLag);
+        break;
+      case 'shutdown':
+        s.tailImpulse += s.eng[i] * SS.raptorThrustVac * dt;
+        s.eng[i] *= Math.exp(-dt / SS.shutdownTau);
+        if (s.eng[i] < 0.01) { s.eng[i] = 0; if (!s.engQueued[i]) s.engPhase[i] = 'off'; }
+        break;
+      default:
+        s.eng[i] = 0;
     }
-    s.eng[i] += (target - s.eng[i]) * Math.min(1, dt / SS.engineLag);
-    if (!s.engOn[i] && s.eng[i] < 0.01) s.eng[i] = 0;
   }
   // net engine force: each engine gimbals so its line of action passes near the CG; axial component only
   let Fx = 0;
@@ -164,7 +204,7 @@ export function stepStarship(s: SSState, c: SSControls, dt: number, terrain: Ter
   }
   const mdot = s.thrustN / (SS.raptorIsp * G0);
   s.prop = Math.max(0, s.prop - mdot * dt);
-  if (s.prop <= 0) s.eng = [0, 0, 0];
+  if (s.prop <= 0) { s.eng = [0, 0, 0]; s.engPhase = ['off', 'off', 'off']; s.engOn = [false, false, false]; }
   s.dvUsed += (Fx / m) * dt;
 
   // ---- torque: gimbal authority when engines run, attitude thrusters otherwise ----

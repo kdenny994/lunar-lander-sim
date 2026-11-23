@@ -8,7 +8,8 @@ import { LMState, stepLM } from './sim/lm';
 import { DigitalAutopilot } from './sim/dap';
 import { TerrainRenderer } from './render/terrain';
 import { LMModel } from './render/lmModel';
-import { InputManager, type Action } from './ui/input';
+import { LMInterior } from './render/lmInterior';
+import { InputManager, XBOX_LAYOUT, type Action } from './ui/input';
 import { setupTouch } from './ui/touch';
 import { Hud } from './ui/hud';
 import { SkyRenderer, type SkyData } from './render/sky';
@@ -77,6 +78,10 @@ async function apolloMain() {
   scene.add(terrainR.group);
   const lm = new LMModel();
   scene.add(lm.body, lm.dustObject);
+  // commander's cabin: textured interior around the forward windows (falls back to the flat window frame until loaded)
+  const cabin = new LMInterior('./models/lm_interior');
+  scene.add(cabin.group);
+  cabin.onReady = () => document.body.classList.add('cabin3d');
   loadMsg('Loading lunar module…', 0.15);
   try {
     await withTimeout(lm.load('./models/apollo_lm.gltf.json'), 45000, 'lunar module model');
@@ -145,6 +150,7 @@ async function apolloMain() {
       case 'takeControl': if (mode === 'replay') setMode('flight'); else { tRail = Math.min(phys.t, replay.duration); setMode('replay'); } break;
       case 'view': setView(view === 'chase' ? 'cockpit' : view === 'cockpit' ? 'ground' : view === 'ground' ? 'sky' : 'chase'); break;
       case 'pause': paused = !paused; break;
+      case 'resetView': Object.assign(camCtl, camHome); break;
       case 'warpUp': warpI = Math.min(mode === 'flight' ? 2 : warps.length - 1, warpI + 1); break;
       case 'warpDown': warpI = Math.max(0, warpI - 1); break;
       case 'rodUp': if (mode === 'flight') { dap.rodClick(1); hud.flash(`ROD ${fmtRate(dap.hdotCmd)}`); } break;
@@ -186,6 +192,7 @@ async function apolloMain() {
 
   // ---------- camera controls (drag / wheel / pinch) ----------
   const camCtl = { az: Math.PI, el: 0.25, dist: window.innerWidth < window.innerHeight ? 46 : 28, lookYaw: 0, lookPitch: -0.55 };
+  const camHome = { ...camCtl };
   // planetarium view: look direction in local ENU (az from north, el), vertical field of view in degrees
   const skyCtl = { az: -Math.PI / 2, el: 0.75, fov: 60, eyeLogLa: -3, matchSquare: false };
   const skyPanel = new SkyPanel();
@@ -357,6 +364,23 @@ async function apolloMain() {
     requestAnimationFrame(frameLoop);
     const dtReal = Math.min(0.1, clock.getDelta());
     input.update(dtReal);
+    // right stick: look around in the current view; D-pad up/down: zoom (Xbox layout)
+    {
+      const L = input.look;
+      if (L.x || L.y || L.zoom) {
+        if (view === 'sky') {
+          const k = (skyCtl.fov * Math.PI / 180) * 0.8 * dtReal;
+          skyCtl.az += L.x * k; skyCtl.el = Math.max(-0.6, Math.min(Math.PI / 2, skyCtl.el + L.y * k));
+          skyCtl.fov = Math.min(100, Math.max(2, skyCtl.fov * Math.exp(L.zoom * 1.2 * dtReal)));
+        } else if (view === 'cockpit') {
+          camCtl.lookYaw = Math.max(-1.2, Math.min(1.2, camCtl.lookYaw - L.x * 1.5 * dtReal));
+          camCtl.lookPitch = Math.max(-1.3, Math.min(0.6, camCtl.lookPitch + L.y * 1.5 * dtReal));
+        } else {
+          camCtl.az -= L.x * 1.8 * dtReal; camCtl.el = Math.max(-0.2, Math.min(1.5, camCtl.el - L.y * 1.2 * dtReal));
+          camCtl.dist = Math.min(5000, Math.max(8, camCtl.dist * Math.exp(L.zoom * 1.5 * dtReal)));
+        }
+      }
+    }
     const warp = warps[warpI];
     const dt = paused ? 0 : dtReal * warp;
 
@@ -425,11 +449,14 @@ async function apolloMain() {
     if (view === 'sky' && pendingLook) { applyPhotoLook(pendingLook); pendingLook = null; }
     lm.model.visible = view !== 'cockpit' && view !== 'sky';
     $('cockpit').hidden = view !== 'cockpit';
+    cabin.group.visible = view === 'cockpit' && cabin.ready;
     if (view === 'cockpit') {
       camera.fov = 62;
       // commander's eye: left (-Y) station, looking out the forward window
       const eye = new THREE.Vector3(1.0, -0.55, 1.05).applyQuaternion(qRender);
       camera.position.copy(eye);
+      cabin.group.position.copy(eye);
+      cabin.group.quaternion.copy(qRender).multiply(LMInterior.qCabinToBody);
       const fwd = new THREE.Vector3(0, 0, 1), upB = new THREE.Vector3(1, 0, 0);
       const look = fwd.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), camCtl.lookPitch)
         .applyAxisAngle(new THREE.Vector3(1, 0, 0), camCtl.lookYaw);
@@ -568,6 +595,7 @@ function startMission(m: Mission, ss?: { engines: number; manual: boolean }) {
 }
 
 function boot() {
+  $('padmap').innerHTML = XBOX_LAYOUT.map(([b, f]) => `<tr><td>${b}</td><td>${f}</td></tr>`).join('');
   const chooseAgain = () => { location.hash = 'choose'; location.reload(); };
   $('btn-mission').addEventListener('click', chooseAgain);
   $('help-mission').addEventListener('click', chooseAgain);

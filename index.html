@@ -113,6 +113,7 @@
     <div class="g"><span class="lbl">PROPELLANT</span><span id="s-prop">—</span></div>
     <div class="g"><span class="lbl">MASS</span><span id="s-mass">—</span></div>
   </div>
+  <div id="ss-pred" class="ss-pred" hidden></div>
   <div class="ss-dv"><span class="lbl">Ascent Δv left for 600 km orbit</span><div class="dvbar"><div id="s-dvbar"></div><i id="s-dvneed"></i></div><span id="s-dv">—</span></div>
 </section>
 
@@ -160,8 +161,9 @@
       <p><b>Sky view</b> (V until “View: Sky”): drag to look, pinch / wheel to zoom from 2° to 100°. <b>Eye</b> shows what a dark-adapting eye would see, <b>Hasselblad</b> the Apollo surface film exposure, <b>AOT</b> the alignment telescope.</p>
     </div>
     <div>
-      <h3>Gamepad / joystick</h3>
-      <p>Standard gamepad: left stick ACA, right stick X yaw, Y fore/aft translation, triggers throttle, d-pad ROD, bumpers lateral translation, A take control, Y view, X throttle mode, B engine stop.</p>
+      <h3>Xbox controller (Flight Simulator 2024 layout)</h3>
+      <table class="padmap" id="padmap"></table>
+      <p class="small">Y is a modifier, as in Flight Simulator: hold Y, then press the second button. Other gamepads with the standard layout use the same positions. HOTAS / flight sticks: stick roll and pitch, twist yaw, throttle lever.</p>
       <p>Flight stick (HOTAS): roll/pitch, twist yaw, throttle lever, trigger take control, buttons 2/3 ROD.</p>
       <h3>iPad</h3>
       <p>Left pad: attitude. Right pad: yaw left/right, throttle up/down (manual mode). Buttons for ROD and engine stop.</p>
@@ -169,7 +171,7 @@
   </div>
   <div id="ss-help">
   <h3>Starship HLS</h3>
-  <p><b>1 / 2 / 3</b> or <b>R / F</b> (gamepad d-pad, touch ENG +/−) choose how many of the three inner Raptors fire. With the guidance flying, that choice sets the braking engines (or the landing-burn engines once the ship has pitched up). In manual it is the live engine count. <b>T</b> switches the throttle between manual and the hoverslam autothrottle, <b>X</b> arms or safes the engines.</p>
+  <p><b>1 / 2 / 3</b> or <b>R / F</b> (Xbox LB / RB, touch ENG +/−) choose how many of the three inner Raptors fire. With the guidance flying, that choice sets the braking engines (or the landing-burn engines once the ship has pitched up). In manual it is the live engine count. <b>T</b> switches the throttle between manual and the hoverslam autothrottle, <b>X</b> (Xbox X) cuts the Raptors off or starts them, at any time and in either mode. A shutdown takes about 0.4 s and still delivers a short tail-off impulse, and a start takes about 2 s to reach minimum throttle, so time a relight early.</p>
   <p>Even one Raptor at its 40 % minimum pushes the landed ship at about twice lunar gravity, so Starship cannot hover: every landing ends in a constant-deceleration “hoverslam” timed to reach 1 m/s at the pads.</p>
   <div id="ss-budget" class="small"></div>
   </div>

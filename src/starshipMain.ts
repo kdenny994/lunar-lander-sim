@@ -6,6 +6,7 @@ import { RenderFrame, enuAt, llrToVec, vecToLLR } from './sim/geo';
 import { TerrainData, polarInverse } from './sim/terrainData';
 import { SS, SSState, stepStarship, massBudget, descentOrbitState, ascentDvAvailable, type SSControls } from './sim/starship';
 import { StarshipGuidance, SSManualAP } from './sim/starshipGuidance';
+import { predictTouchdown, hoverslam, type SSPrediction } from './sim/ssPredict';
 import { TerrainRenderer } from './render/terrain';
 import { StarshipModel } from './render/starshipModel';
 import { LMModel } from './render/lmModel';
@@ -91,6 +92,16 @@ export async function starshipMain(opts: StarshipOptions) {
   scene.add(terrainR.group);
   const ship = new StarshipModel();
   scene.add(ship.body);
+  loadMsg('Loading the Starship model…', 0.1);
+  await withTimeout(ship.loadShip('./models/starship_ship.gltf.json'), 90000, 'the Starship model').catch((e) => console.warn(e));
+  // predicted touchdown marker (manual flight): a ring on the ground, sized to the leg footprint
+  const predMarker = new THREE.Mesh(new THREE.RingGeometry(SS.padRadius + 1, SS.padRadius + 3, 48),
+    new THREE.MeshBasicMaterial({ color: 0xffa040, transparent: true, opacity: 0.85, side: THREE.DoubleSide, depthTest: false }));
+  predMarker.renderOrder = 5;
+  predMarker.visible = false;
+  scene.add(predMarker);
+  let pred: SSPrediction | null = null, predT = 0;
+  let hsLit = false; // hoverslam autothrottle: engines lit
   const dustFx = new LMModel(); // reuse the LM's dust sheet, scaled up for Raptor exhaust
   scene.add(dustFx.dustObject);
   loadMsg('Loading LROC south-pole imagery…', 0.15);
@@ -167,6 +178,7 @@ export async function starshipMain(opts: StarshipOptions) {
     if (m === 'auto') { g.resume(s); g.brakingEngines = g.phase === 'landing' ? g.brakingEngines : nSel; if (!quiet) event('Guidance flying'); }
     else {
       mAP.reset();
+      hsLit = s.running > 0;
       nSel = Math.max(1, s.running || nSel);
       input.state.throttle = s.running ? Math.max(0, (avgThrottle() - SS.minThrottle) / (1 - SS.minThrottle)) : 0.3;
       if (!quiet) event(`Manual control: rate command / attitude hold, ${autoThr ? 'hoverslam autothrottle' : 'manual throttle'}`);
@@ -204,6 +216,7 @@ export async function starshipMain(opts: StarshipOptions) {
       case 'takeControl': setMode(mode === 'auto' ? 'manual' : 'auto'); break;
       case 'view': setView(view === 'chase' ? 'cockpit' : view === 'cockpit' ? 'ground' : view === 'ground' ? 'sky' : 'chase'); break;
       case 'pause': paused = !paused; break;
+      case 'resetView': Object.assign(camCtl, camHome); break;
       case 'warpUp': warpI = Math.min(mode === 'manual' ? 2 : warps.length - 1, warpI + 1); break;
       case 'warpDown': warpI = Math.max(0, warpI - 1); break;
       case 'rodUp': setEngines(nSel + 1); break;
@@ -217,9 +230,18 @@ export async function starshipMain(opts: StarshipOptions) {
         setMode(mode, true);
         event(autoThr ? 'Hoverslam autothrottle' : 'Manual throttle');
         break;
-      case 'engineStop':
-        if (mode === 'manual') { armed = !armed; event(armed ? 'Engines armed' : 'Engines safed (shutdown)'); }
+      case 'engineStop': {
+        // X: crew engine cutoff / start. From the guidance this is an override: it hands over to manual first.
+        const wasAuto = mode === 'auto';
+        if (wasAuto) { setMode('manual', true); armed = true; }
+        armed = !armed;
+        const n = Math.max(1, nSel);
+        const tailoff = (-Math.log(0.01 / Math.max(0.4, avgThrottle())) * SS.shutdownTau).toFixed(1);
+        if (!armed) event(`${wasAuto ? 'Guidance off. ' : ''}Raptor cutoff: thrust tails off over ${tailoff} s, ${SS.shutdownProp} kg purged per engine`);
+        else if (autoThr && !hsLit) event(`Raptors armed: the autothrottle starts ${n === 1 ? 'it' : 'them'} when braking is needed (ignition ${SS.engineSpin.toFixed(1)} s, minimum thrust ${SS.engineStart.toFixed(1)} s after the start command)`);
+        else event(`Raptor start on ${n} engine${n > 1 ? 's' : ''}: ignition in ${SS.engineSpin.toFixed(1)} s, minimum thrust at ${SS.engineStart.toFixed(1)} s, ${SS.startProp} kg per start`);
         break;
+      }
       case 'restart': restart('orbit', false); break;
     }
   });
@@ -252,6 +274,7 @@ export async function starshipMain(opts: StarshipOptions) {
   $('ss-panel').hidden = false;
   $('ss-budget').innerHTML = budgetHtml(mb);
   $('credits').innerHTML = [
+    'Starship model: “SpaceX Starship Ship 24 & Booster 7 V4” by clarence365 (Sketchfab), CC BY 4.0, Ship stage only, simplified.',
     meta.source as string, (terrain.corridor.meta.source as string),
     'Global background: LROC WAC mosaic (NASA/GSFC/ASU).',
     'Landing point: chosen on the LOLA 5 m DEM for a 0.4° slope over a 120 m footprint on the ridge running from the Shackleton rim; 89.77° S, 203.8° E. Date chosen for a Sun 1.5° above the horizon and Earth 3.7° up.',
@@ -274,6 +297,7 @@ export async function starshipMain(opts: StarshipOptions) {
 
   // ---------- camera controls ----------
   const camCtl = { az: Math.PI * 0.85, el: 0.22, dist: window.innerWidth < window.innerHeight ? 260 : 170, lookYaw: 0, lookPitch: -0.35 };
+  const camHome = { ...camCtl };
   const skyCtl = { az: Math.PI * 0.8, el: 0.15, fov: 60, eyeLogLa: -3 };
   const skyPanel = new SkyPanel();
   function setView(v: View) { view = v; skyPanel.setVisible(v === 'sky'); }
@@ -336,17 +360,19 @@ export async function starshipMain(opts: StarshipOptions) {
   /** manual flight: crew attitude, engine count and throttle (manual, or the hoverslam autothrottle) */
   function manualControls(): SSControls {
     mAP.update(s, g, ctl, input.state.pitch, input.state.yaw, input.state.roll);
-    ctl.engines = armed ? nSel : 0;
     if (autoThr) {
+      // hoverslam autothrottle: holds the engines off until minimum thrust is needed, then brakes to 1 m/s at the pads
       const u = localUp();
-      const vz = s.v.dot(u);
-      const hh = Math.max(0.3, s.altitude(terrain) + 0.5);
-      const av = Math.max(0, (vz * vz - 1) / (2 * hh)) + G_MOON;
       const xb = new THREE.Vector3(1, 0, 0).applyQuaternion(s.q);
-      const cosT = Math.max(0.3, xb.dot(u));
       const aMax = (Math.max(1, nSel) * SS.raptorThrustVac) / s.mass;
-      ctl.throttle = Math.min(1, Math.max(SS.minThrottle, av / (aMax * cosT)));
-    } else ctl.throttle = SS.minThrottle + (1 - SS.minThrottle) * input.state.throttle;
+      const hs = hoverslam(s.altitude(terrain), s.v.dot(u), xb.dot(u), aMax, hsLit);
+      hsLit = hs.on;
+      ctl.engines = armed && hsLit ? nSel : 0;
+      ctl.throttle = Math.min(1, Math.max(SS.minThrottle, hs.accel / aMax));
+    } else {
+      ctl.engines = armed ? nSel : 0;
+      ctl.throttle = SS.minThrottle + (1 - SS.minThrottle) * input.state.throttle;
+    }
     return ctl;
   }
 
@@ -422,6 +448,23 @@ export async function starshipMain(opts: StarshipOptions) {
     requestAnimationFrame(frameLoop);
     const dtReal = Math.min(0.1, clock.getDelta());
     input.update(dtReal);
+    // right stick: look around in the current view; D-pad up/down: zoom (Xbox layout)
+    {
+      const L = input.look;
+      if (L.x || L.y || L.zoom) {
+        if (view === 'sky') {
+          const k = (skyCtl.fov * Math.PI / 180) * 0.8 * dtReal;
+          skyCtl.az += L.x * k; skyCtl.el = Math.max(-0.6, Math.min(Math.PI / 2, skyCtl.el + L.y * k));
+          skyCtl.fov = Math.min(100, Math.max(2, skyCtl.fov * Math.exp(L.zoom * 1.2 * dtReal)));
+        } else if (view === 'cockpit') {
+          camCtl.lookYaw = Math.max(-1.4, Math.min(1.4, camCtl.lookYaw - L.x * 1.5 * dtReal));
+          camCtl.lookPitch = Math.max(-1.3, Math.min(0.8, camCtl.lookPitch + L.y * 1.5 * dtReal));
+        } else {
+          camCtl.az -= L.x * 1.8 * dtReal; camCtl.el = Math.max(-0.2, Math.min(1.5, camCtl.el - L.y * 1.2 * dtReal));
+          camCtl.dist = Math.min(30000, Math.max(40, camCtl.dist * Math.exp(L.zoom * 1.5 * dtReal)));
+        }
+      }
+    }
     const warp = warps[warpI];
     const dt = paused ? 0 : dtReal * warp;
 
@@ -458,6 +501,19 @@ export async function starshipMain(opts: StarshipOptions) {
     qRender.copy(frame.q).multiply(s.q);
     ship.body.quaternion.copy(qRender);
     ship.setEngines(s.eng);
+    // predicted touchdown, refreshed four times a second while the crew flies
+    predT -= dtReal;
+    if (mode === 'manual' && !s.touchdown && predT <= 0) {
+      predT = 0.25;
+      pred = predictTouchdown(s, { engines: armed ? nSel : 0, throttle: autoThr ? null : SS.minThrottle + (1 - SS.minThrottle) * input.state.throttle }, terrain);
+    }
+    predMarker.visible = mode === 'manual' && !!pred && !s.touchdown && view !== 'sky';
+    if (predMarker.visible && pred) {
+      predMarker.position.copy(frame.dir(tmp.copy(pred.pos).addScaledVector(pred.pos.clone().normalize(), 0.6).sub(origin)));
+      predMarker.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), frame.dir(pred.pos.clone().normalize()).normalize());
+      const d = predMarker.position.length();
+      predMarker.scale.setScalar(Math.max(1, d / 900));
+    }
 
     const altPads = s.altitude(terrain);
     const altCG = altPads + SS.cgAbovePads;
@@ -544,18 +600,35 @@ export async function starshipMain(opts: StarshipOptions) {
     const phaseName = s.landed ? 'LANDED' : s.crashed ? 'CRASH' : mode === 'manual' ? 'MANUAL' : g.phase === 'landing' && g.pitching ? 'PITCH-UP' : g.phase.toUpperCase();
     $('prog').textContent = phaseName;
     $('ss-phase').textContent = phaseName;
-    $('ss-status').textContent = mode === 'auto' ? g.status : (autoThr ? 'Hoverslam autothrottle: the engines brake so you reach 1 m/s at the pads' : 'Manual throttle') + (armed ? '' : ' · ENGINES SAFED');
+    $('ss-status').textContent = mode === 'auto' ? g.status : (autoThr ? (armed && !hsLit && !s.touchdown ? 'Hoverslam autothrottle: holding the Raptors off until minimum thrust is needed' : 'Hoverslam autothrottle: the engines brake so you reach 1 m/s at the pads') : 'Manual throttle') + (armed ? '' : ' · ENGINES CUT OFF (X to start)');
     $('btn-warp').textContent = `×${warp}`;
     $('btn-pause').textContent = paused ? '▶' : '❚❚';
     $('btn-view').textContent = `View: ${view === 'chase' ? 'Chase' : view === 'cockpit' ? 'Window' : view === 'sky' ? 'Sky' : 'Surface'}`;
     const sel = mode === 'auto' ? (g.phase === 'landing' ? g.landingEngines : g.brakingEngines) : nSel;
     for (let i = 0; i < 3; i++) {
       const el = $(`ss-e${i}`);
-      el.classList.toggle('on', s.eng[i] > SS.minThrottle * 0.9);
-      el.classList.toggle('start', s.engOn[i] && s.eng[i] <= SS.minThrottle * 0.9);
+      el.classList.toggle('on', s.engPhase[i] === 'run');
+      el.classList.toggle('start', s.engPhase[i] === 'start');
+      el.classList.toggle('tail', s.engPhase[i] === 'shutdown');
       el.classList.toggle('sel', i < sel);
     }
-    $('ss-esel').textContent = mode === 'auto' ? `${g.phase === 'landing' ? 'landing burn' : 'braking'}: ${sel} selected` : `${sel} selected${armed ? '' : ' · safed'}`;
+    const pe = $('ss-pred');
+    pe.hidden = mode !== 'manual' || !!s.touchdown;
+    if (!pe.hidden) {
+      if (!pred) pe.innerHTML = '<span class="lbl">Predicted touchdown</span> none with these settings: the ship is climbing or still in orbit';
+      else {
+        const { e: e0, n: n0 } = enuAt(siteGround);
+        const d = pred.pos.clone().sub(siteGround);
+        const dn = d.dot(n0), de = d.dot(e0), dist = Math.hypot(dn, de);
+        const brg = ((Math.atan2(de, dn) * 180 / Math.PI) + 360) % 360;
+        const dir = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'][Math.round(brg / 45) % 8];
+        const hard = pred.vVert > 4 || pred.vHorz > 2;
+        pe.innerHTML = `<span class="lbl">Predicted touchdown</span> <b>${Math.abs(pred.lat).toFixed(4)}° S ${((pred.lon + 360) % 360).toFixed(3)}° E</b> · ` +
+          `${dist < 1000 ? dist.toFixed(0) + ' m' : (dist / 1000).toFixed(dist < 1e4 ? 2 : 1) + ' km'} ${dist < 1 ? '' : dir + ' of target'} · in ${pred.t.toFixed(0)} s · ` +
+          `<span class="${hard ? 'warn' : ''}">${pred.vVert.toFixed(1)} m/s down, ${pred.vHorz.toFixed(1)} m/s across</span>`;
+      }
+    }
+    $('ss-esel').textContent = mode === 'auto' ? `${g.phase === 'landing' ? 'landing burn' : 'braking'}: ${sel} selected` : `${sel} selected${armed ? '' : ' · cut off'}`;
     const vz = s.v.dot(U);
     const vh = horizontalSpeed();
     $('s-alt').textContent = fmtDist(Math.max(0, altPads));
