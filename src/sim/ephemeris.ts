@@ -176,7 +176,10 @@ export interface SkyState {
 }
 
 export function skyAt(t: number): SkyState {
-  const jdUT = jdUTFromSimTime(t);
+  return skyAtJD(jdUTFromSimTime(t));
+}
+
+export function skyAtJD(jdUT: number): SkyState {
   const jdTT = jdUT + DELTA_T_1969 / 86400;
   const R = moonIcrfToBody(jdTT);
   const moon = moonGeocentric(jdTT);

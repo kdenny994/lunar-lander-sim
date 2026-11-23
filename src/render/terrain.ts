@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { MOON } from '../sim/constants';
 import { llrToVec, type RenderFrame } from '../sim/geo';
-import type { HeightGrid, TerrainData } from '../sim/terrainData';
+import { spsForward, type HeightGrid, type TerrainData } from '../sim/terrainData';
 
 interface ChunkDef {
   grid: HeightGrid;
@@ -29,7 +29,7 @@ uniform float uDiscard;
 uniform float uGain;
 `;
 
-function makeMaterial(rectUniforms: { uRect: { value: THREE.Vector4 }; uDiscard: { value: number } } | null, gain: number) {
+function makeMaterial(rectUniforms: { uRect: { value: THREE.Vector4 }; uDiscard: { value: number } } | null, gain: number, baked = false) {
   const mat = new THREE.MeshLambertMaterial({ color: 0xffffff });
   const uGain = { value: gain };
   mat.onBeforeCompile = (sh) => {
@@ -41,9 +41,11 @@ function makeMaterial(rectUniforms: { uRect: { value: THREE.Vector4 }; uDiscard:
       .replace('void main() {', `void main() {
   if (uDiscard > 0.5 && vLL.x > uRect.x && vLL.x < uRect.y && vLL.y > uRect.z && vLL.y < uRect.w) discard;`)
       .replace('#include <map_fragment>', `#include <map_fragment>
-  diffuseColor.rgb *= uGain;`);
+  diffuseColor.rgb *= uGain;`)
+      // baked: the imagery already carries its illumination (polar mosaics), so show it as is
+      .replace('#include <opaque_fragment>', baked ? 'outgoingLight = diffuseColor.rgb;\n#include <opaque_fragment>' : '#include <opaque_fragment>');
   };
-  mat.customProgramCacheKey = () => (rectUniforms ? 'terrain-rect' : 'terrain');
+  mat.customProgramCacheKey = () => (rectUniforms ? 'terrain-rect' : 'terrain') + (baked ? '-baked' : '');
   return mat;
 }
 
@@ -56,9 +58,13 @@ export class TerrainRenderer {
   private pendingSiteTex = 0;
   anisotropy = 8;
 
-  constructor(private data: TerrainData, private frame: RenderFrame, private base: string) {
-    const sb = data.site.bounds;
-    this.rect.uRect.value.set(sb.lonMin - 23, sb.lonMax - 23, sb.latMin, sb.latMax);
+  private baked: boolean;
+  private bgUrl: string;
+  constructor(private data: TerrainData, private frame: RenderFrame, private base: string, opts: { baked?: boolean; bgUrl?: string } = {}) {
+    this.baked = !!opts.baked;
+    this.bgUrl = opts.bgUrl ?? `${base}/moon_global.jpg`;
+    const sb = data.site.rectBounds();
+    this.rect.uRect.value.set(sb.u0, sb.u1, sb.v0, sb.v1);
     this.addGrid(data.corridor, false);
     this.addGrid(data.site, true);
     this.background = this.makeBackground();
@@ -67,16 +73,16 @@ export class TerrainRenderer {
 
   private addGrid(grid: HeightGrid, isSite: boolean) {
     const m = grid.meta as any;
-    const per = isSite ? m.chunkSamples : Math.round(m.chunkDeg / m.dlon);
+    const per = m.chunkSamples ?? Math.round(m.chunkDeg / m.dlon);
     for (let ri = 0; ri < m.chunkRows; ri++) {
       for (let ci = 0; ci < m.chunkCols; ci++) {
         const r0 = ri * per, c0 = ci * per;
         const r1 = Math.min((ri + 1) * per, m.height - 1), c1 = Math.min((ci + 1) * per, m.width - 1);
-        const latC = m.lat0 + ((r0 + r1) / 2) * m.dlat, lonC = m.lon0 + ((c0 + c1) / 2) * m.dlon;
+        const cc = grid.latLon((r0 + r1) / 2, (c0 + c1) / 2);
         const h = grid.sample(Math.round((r0 + r1) / 2), Math.round((c0 + c1) / 2));
-        const center = llrToVec(latC, lonC, MOON.radius + h);
-        const dLat = Math.abs((r1 - r0) * m.dlat), dLon = Math.abs((c1 - c0) * m.dlon);
-        const radius = 0.5 * Math.hypot(dLat, dLon) * (Math.PI / 180) * MOON.radius;
+        const center = llrToVec(cc.lat, cc.lon, MOON.radius + h);
+        const ca = grid.latLon(r0, c0), cb = grid.latLon(r1, c1);
+        const radius = 0.5 * llrToVec(ca.lat, ca.lon, MOON.radius).distanceTo(llrToVec(cb.lat, cb.lon, MOON.radius));
         const def: ChunkDef = {
           grid, r0, r1, c0, c1, center, radius,
           texUrl: `${this.base}/${isSite ? 'site' : 'corridor'}/tex_${ri}_${ci}.jpg`,
@@ -85,7 +91,7 @@ export class TerrainRenderer {
           skirt: isSite ? 6 : 250,
           isSite,
         };
-        const mat = makeMaterial(isSite ? null : this.rect, isSite ? 1.25 : 1.35);
+        const mat = makeMaterial(isSite ? null : this.rect, this.baked ? 1.1 : isSite ? 1.25 : 1.35, this.baked);
         this.chunks.push({ def, mesh: null, geos: [null, null, null], lod: -1, mat });
       }
     }
@@ -125,13 +131,14 @@ export class TerrainRenderer {
     const tmp = new THREE.Vector3();
     const rel = new THREE.Vector3();
     const put = (k: number, r: number, c: number, drop: number) => {
-      const lat = m.lat0 + r * m.dlat, lon = m.lon0 + c * m.dlon;
+      const { lat, lon } = grid.latLon(r, c);
       const h = grid.sample(r, c) - drop;
       llrToVec(lat, lon, MOON.radius + h, tmp);
       this.frame.dir(rel.copy(tmp).sub(def.center), tmp);
       pos[k * 3] = tmp.x; pos[k * 3 + 1] = tmp.y; pos[k * 3 + 2] = tmp.z;
       uv[k * 2] = (c - c0) / (c1 - c0); uv[k * 2 + 1] = 1 - (r - r0) / (r1 - r0);
-      ll[k * 2] = lon - 23; ll[k * 2 + 1] = lat;
+      const rc = grid.rect(r, c);
+      ll[k * 2] = rc[0]; ll[k * 2 + 1] = rc[1];
     };
     for (let i = 0; i < nr; i++) for (let j = 0; j < nc; j++) put(i * nc + j, rows[i], cols[j], 0);
     const idx: number[] = [];
@@ -174,7 +181,8 @@ export class TerrainRenderer {
   private makeBackground(): THREE.Mesh {
     // whole Moon at 1/4 deg, WAC global mosaic; hidden inside the corridor footprint
     const NLON = 720, NLAT = 360;
-    const R = MOON.radius - 2600;
+    const polar = this.data.corridor.polar;
+    const R = MOON.radius - (polar ? 4600 : 2600);
     const pos = new Float32Array((NLON + 1) * (NLAT + 1) * 3);
     const uv = new Float32Array((NLON + 1) * (NLAT + 1) * 2);
     const ll = new Float32Array((NLON + 1) * (NLAT + 1) * 2);
@@ -187,7 +195,10 @@ export class TerrainRenderer {
         llrToVec(lat, lon, R, v);
         pos.set([v.x, v.y, v.z], k * 3);
         uv.set([j / NLON, 1 - i / NLAT], k * 2);
-        ll.set([lon - 23, lat], k * 2);
+        if (polar) {
+          const p = spsForward(Math.min(lat, 60), lon);
+          ll.set([p.x / 1000, p.y / 1000], k * 2);
+        } else ll.set([lon - 23, lat], k * 2);
         k++;
       }
     }
@@ -202,10 +213,11 @@ export class TerrainRenderer {
     g.setAttribute('aLL', new THREE.BufferAttribute(ll, 2));
     g.setIndex(idx);
     g.computeVertexNormals();
-    const cb = this.data.corridor.bounds;
-    const rect = { uRect: { value: new THREE.Vector4(cb.lonMin - 23 + 0.01, cb.lonMax - 23 - 0.01, cb.latMin + 0.01, cb.latMax - 0.01) }, uDiscard: { value: 1 } };
-    const mat = makeMaterial(rect, 1.35);
-    this.loader.load(`${this.base}/moon_global.jpg`, (t) => { t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = this.anisotropy; mat.map = t; mat.needsUpdate = true; });
+    const cb = this.data.corridor.rectBounds();
+    const e = polar ? 0.3 : 0.01;
+    const rect = { uRect: { value: new THREE.Vector4(cb.u0 + e, cb.u1 - e, cb.v0 + e, cb.v1 - e) }, uDiscard: { value: 1 } };
+    const mat = makeMaterial(rect, this.baked ? 0.9 : 1.35, this.baked);
+    this.loader.load(this.bgUrl, (t) => { t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = this.anisotropy; mat.map = t; mat.needsUpdate = true; });
     const mesh = new THREE.Mesh(g, mat);
     mesh.frustumCulled = false;
     mesh.receiveShadow = false;

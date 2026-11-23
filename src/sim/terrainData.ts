@@ -3,13 +3,56 @@
 export interface GridMeta {
   width: number; height: number;
   lon0: number; lat0: number; dlon: number; dlat: number; // centre of sample (0,0) and spacing (deg)
+  /** 'sps': south polar stereographic grid, x = x0 + c dx, y = y0 + r dy (m) */
+  proj?: 'sps'; x0?: number; y0?: number; dx?: number; dy?: number;
   scale: number; offset: number;
   source: string;
   [k: string]: unknown;
 }
 
+const R_MOON = 1737400;
+const D2R = Math.PI / 180;
+/** south polar stereographic (sphere, true scale at the pole) */
+export function spsForward(lat: number, lon: number) {
+  const rho = 2 * R_MOON * Math.tan(((90 + lat) / 2) * D2R);
+  return { x: rho * Math.sin(lon * D2R), y: rho * Math.cos(lon * D2R) };
+}
+export function spsInverse(x: number, y: number) {
+  const rho = Math.hypot(x, y);
+  return { lat: -90 + (2 * Math.atan(rho / (2 * R_MOON))) / D2R, lon: Math.atan2(x, y) / D2R };
+}
+
 export class HeightGrid {
   constructor(readonly meta: GridMeta, readonly data: Int16Array) {}
+
+  get polar() { return this.meta.proj === 'sps'; }
+
+  /** fractional row/col of a lat/lon */
+  rc(lat: number, lon: number) {
+    const m = this.meta;
+    if (m.proj === 'sps') {
+      const p = spsForward(lat, lon);
+      return { r: (p.y - m.y0!) / m.dy!, c: (p.x - m.x0!) / m.dx! };
+    }
+    return { r: (lat - m.lat0) / m.dlat, c: (lon - m.lon0) / m.dlon };
+  }
+
+  latLon(r: number, c: number) {
+    const m = this.meta;
+    if (m.proj === 'sps') return spsInverse(m.x0! + c * m.dx!, m.y0! + r * m.dy!);
+    return { lat: m.lat0 + r * m.dlat, lon: m.lon0 + c * m.dlon };
+  }
+
+  /** planar coordinates used for the "site inside corridor" cut-out: (lon - 23, lat) deg, or (x, y) km when polar */
+  rect(r: number, c: number): [number, number] {
+    const m = this.meta;
+    if (m.proj === 'sps') return [(m.x0! + c * m.dx!) / 1000, (m.y0! + r * m.dy!) / 1000];
+    return [m.lon0 + c * m.dlon - 23, m.lat0 + r * m.dlat];
+  }
+  rectBounds() {
+    const a = this.rect(0, 0), b = this.rect(this.meta.height - 1, this.meta.width - 1);
+    return { u0: Math.min(a[0], b[0]), u1: Math.max(a[0], b[0]), v0: Math.min(a[1], b[1]), v1: Math.max(a[1], b[1]) };
+  }
 
   sample(r: number, c: number): number {
     const m = this.meta;
@@ -20,14 +63,13 @@ export class HeightGrid {
 
   contains(lat: number, lon: number, marginSamples = 0): boolean {
     const m = this.meta;
-    const r = (lat - m.lat0) / m.dlat, c = (lon - m.lon0) / m.dlon;
+    const { r, c } = this.rc(lat, lon);
     return r >= marginSamples && c >= marginSamples && r <= m.height - 1 - marginSamples && c <= m.width - 1 - marginSamples;
   }
 
   /** Bilinear height at lat/lon (deg). */
   heightAt(lat: number, lon: number): number {
-    const m = this.meta;
-    const r = (lat - m.lat0) / m.dlat, c = (lon - m.lon0) / m.dlon;
+    const { r, c } = this.rc(lat, lon);
     const r0 = Math.floor(r), c0 = Math.floor(c);
     const fr = r - r0, fc = c - c0;
     const a = this.sample(r0, c0), b = this.sample(r0, c0 + 1);
@@ -70,7 +112,7 @@ export class TerrainData {
  * Heights are stored losslessly as RGB PNG: R = high byte, G = low byte of (value + 32768).
  * Decoded in JS (zlib via DecompressionStream) so Safari's colour management can never alter the bytes.
  */
-async function decodeHeightPng(blob: Blob, w: number, h: number): Promise<Int16Array> {
+export async function decodeHeightPng(blob: Blob, w: number, h: number): Promise<Int16Array> {
   const buf = new Uint8Array(await blob.arrayBuffer());
   const dv = new DataView(buf.buffer);
   let p = 8, width = 0, height = 0, ctype = 0;
