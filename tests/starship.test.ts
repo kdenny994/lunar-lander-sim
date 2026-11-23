@@ -26,7 +26,7 @@ const fromV = llrToVec(from.lat, from.lon, MOON.radius);
 const mb = massBudget();
 console.log('budget', JSON.stringify(Object.fromEntries(Object.entries(mb).map(([k, v]) => [k, Math.round(v as number)]))));
 
-type Case = { name: string; n: number; toggleAt?: number; toggleTo?: number; cross?: number; massScale?: number };
+type Case = { name: string; n: number; land?: number; toggleAt?: number; toggleTo?: number; cross?: number; massScale?: number };
 const cases: Case[] = [
   { name: '3-engine braking', n: 3 },
   { name: '2-engine braking', n: 2 },
@@ -35,6 +35,8 @@ const cases: Case[] = [
   { name: 'crew toggles 1 -> 3 engines mid-braking', n: 1, toggleAt: 150, toggleTo: 3 },
   { name: 'orbit 1.5 km off the ground track, 2 engines', n: 2, cross: 1500 },
   { name: '5 % heavier than planned, 3 engines', n: 3, massScale: 1.05 },
+  { name: '3-engine braking, 2-engine landing burn', n: 3, land: 2 },
+  { name: '3-engine braking, 3-engine landing burn', n: 3, land: 3 },
 ];
 for (const k of cases) {
   const s = new SSState();
@@ -45,6 +47,7 @@ for (const k of cases) {
   const m0 = s.mass;
   const g = new StarshipGuidance(siteGround, fromV);
   g.brakingEngines = k.n;
+  if (k.land) g.landingEngines = k.land;
   g.groundRadius = (p) => { const q = p.clone().normalize(); const lat = Math.asin(q.z) * 180 / Math.PI, lon = Math.atan2(q.y, q.x) * 180 / Math.PI; return MOON.radius + terrain.heightAt(lat, lon); };
   let maxG = 0, pdiRange = 0, t = 0;
   const dt = 0.005;

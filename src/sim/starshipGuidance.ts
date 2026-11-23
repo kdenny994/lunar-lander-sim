@@ -73,6 +73,8 @@ export class StarshipGuidance {
   attTarget: Vector3 | null = null;
   /** landing burn: engine cut because the ship was too slow for a hoverslam; waiting to relight */
   relightWait = false;
+  /** multi-engine landing burn: shut down to one engine for the terminal hoverslam */
+  finalOne = false;
   /** landing burn, first part: pitching the hull up to vertical on the braking engines */
   pitching = false;
   /** throttle held during the pitch-up */
@@ -107,7 +109,7 @@ export class StarshipGuidance {
     const h = rel.dot(this.siteUp);
     const d = rel.addScaledVector(this.siteUp, -h).length();
     const vh = s.v.clone().addScaledVector(this.siteUp, -s.v.dot(this.siteUp)).length();
-    this.relightWait = false; this.pitching = false;
+    this.relightWait = false; this.pitching = false; this.finalOne = false;
     this.phase = s.running === 0 && h > 8000 ? 'coast' : (d > 1500 || vh > 60 || h > 4000) ? 'braking' : 'landing';
   }
 
@@ -208,7 +210,7 @@ export class StarshipGuidance {
       const thrL = nLand * SS.raptorThrustVac * StarshipGuidance.PITCH_THROTTLE;
       const arm = Math.sin(SS.gimbalMax * 0.6) * SS.cgAboveEngines, Iy = s.inertia().y;
       const pu = pitchUpDv(theta0, (thrN * arm + SS.rcsTorque) / Iy, (thrL * arm + SS.rcsTorque) / Iy, (thrN * OFF) / s.mass, (thrL * OFF) / s.mass);
-      if (vh < pu.dv || this.tgo < 3 || dist < 5) { this.phase = 'landing'; this.relightWait = false; this.pitching = true; }
+      if (vh < pu.dv || this.tgo < 3 || dist < 5) { this.phase = 'landing'; this.relightWait = false; this.pitching = true; this.finalOne = false; }
     } else {
       // ---- landing burn ----
       if (this.pitching) {
@@ -240,7 +242,22 @@ export class StarshipGuidance {
       // aim 0.5 m below the surveyed pad height so the legs always find the ground (they stroke to absorb it)
       const hh = Math.max(0.05, h + 0.5);
       this.tgo = Math.max(0.4, (2 * hh) / Math.max(0.5, -vz + vf));
-      const av = Math.max(0, (vz * vz - vf * vf) / (2 * hh)) + 1.62;
+      let av = Math.max(0, (vz * vz - vf * vf) / (2 * hh)) + 1.62;
+      // Two or three engines for the landing burn: their minimum thrust is too high for a soft touchdown, so they
+      // brake to a terminal gate 250 m up, sinking at the rate a one-engine hoverslam needs, then shut down to one.
+      if (n > 1 && !this.finalOne) {
+        const HT = 250;
+        if (av <= this.landingAccel(s, 1) || hh < HT) this.finalOne = true;
+        else {
+          const vT = Math.sqrt(2 * (this.landingAccel(s, 1) - 1.62) * HT + vf * vf);
+          const avM = Math.max(0, (vz * vz - vT * vT) / (2 * Math.max(1, hh - HT))) + 1.62;
+          // as many of the selected engines as the deceleration needs (their 40 % floor must fit under it)
+          let k = n;
+          while (k > 1 && this.aMin(s, k) > 0.97 * avM) k--;
+          n = k; av = avM;
+        }
+      }
+      if (this.finalOne) n = 1;
       // cut and relight if the ship is too slow for the hoverslam (it cannot hover, and pinned at minimum throttle
       // it has no margin left), coasting until the need has built back up to the design value
       const aDesign = this.landingAccel(s, n);
