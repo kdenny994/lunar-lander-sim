@@ -1,4 +1,5 @@
 // Starship HLS mode: powered descent from a 600 x 15 km orbit to the rim of Shackleton crater.
+import { quality } from './ui/quality';
 import * as THREE from 'three';
 import { MOON } from './sim/constants';
 import { skyAtJD, planetsFromMoon, type SkyState } from './sim/ephemeris';
@@ -50,7 +51,7 @@ export async function starshipMain(opts: StarshipOptions) {
   const groundRadius = (p: THREE.Vector3) => { const { lat, lon } = vecToLLR(p); return MOON.radius + terrain.heightAt(lat, lon); };
 
   // ---------- renderer / scene ----------
-  const mobile = matchMedia('(pointer: coarse)').matches || /iPhone|iPad|Android/.test(navigator.userAgent);
+  const mobile = quality() === 'low';
   const renderer = new THREE.WebGLRenderer({ antialias: !mobile || window.devicePixelRatio < 2, logarithmicDepthBuffer: true, powerPreference: 'high-performance' });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, mobile ? 1.5 : 2));
   renderer.domElement.addEventListener('webglcontextlost', (e) => { e.preventDefault(); loadMsg('The graphics context was lost (the device reclaimed GPU memory). Reload the page to continue.'); $('loading').hidden = false; });
@@ -70,7 +71,7 @@ export async function starshipMain(opts: StarshipOptions) {
   const sunDirW = skyState.sunDir.clone(), earthDirW = skyState.earthDir.clone();
   const sun = new THREE.DirectionalLight(0xfff6ea, 3.2);
   sun.castShadow = true;
-  sun.shadow.mapSize.setScalar(mobile ? 1024 : 2048);
+  sun.shadow.mapSize.setScalar(mobile ? 1024 : 4096);
   sun.shadow.bias = -0.0004;
   sun.shadow.normalBias = 0.08;
   const sc = sun.shadow.camera as THREE.OrthographicCamera;
@@ -89,17 +90,42 @@ export async function starshipMain(opts: StarshipOptions) {
 
   const terrainR = new TerrainRenderer(terrain, frame, TBASE, { baked: true, bgUrl: `${BASE}/terrain/moon_global.jpg` });
   terrainR.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  terrainR.hiRes = !mobile;
   scene.add(terrainR.group);
   const ship = new StarshipModel();
   scene.add(ship.body);
   loadMsg('Loading the Starship model…', 0.1);
-  await withTimeout(ship.loadShip('./models/starship_ship.gltf.json'), 90000, 'the Starship model').catch((e) => console.warn(e));
-  // predicted touchdown marker (manual flight): a ring on the ground, sized to the leg footprint
-  const predMarker = new THREE.Mesh(new THREE.RingGeometry(SS.padRadius + 1, SS.padRadius + 3, 48),
-    new THREE.MeshBasicMaterial({ color: 0xffa040, transparent: true, opacity: 0.85, side: THREE.DoubleSide, depthTest: false }));
-  predMarker.renderOrder = 5;
+  await withTimeout(ship.loadShip(mobile ? './models/starship_ship_lo.gltf.json' : './models/starship_ship.gltf.json'), 90000, 'the Starship model').catch((e) => console.warn(e));
+  // predicted touchdown marker (manual flight): rings and a cross on the ground sized to the leg footprint, a light
+  // column standing up from it so it can be found from altitude, and a screen tag. Drawn over the terrain.
+  const predMarker = new THREE.Group();
+  {
+    const mat = (o: number, depth = false) => new THREE.MeshBasicMaterial({ color: 0xffa040, transparent: true, opacity: o, side: THREE.DoubleSide, depthTest: depth, depthWrite: false });
+    const R = SS.padRadius + 2;
+    predMarker.add(new THREE.Mesh(new THREE.RingGeometry(R, R + 2.5, 64), mat(0.95)));
+    predMarker.add(new THREE.Mesh(new THREE.RingGeometry(R * 2.2, R * 2.2 + 1.5, 64), mat(0.6)));
+    predMarker.add(new THREE.Mesh(new THREE.CircleGeometry(R, 48), mat(0.18)));
+    for (const a of [0, Math.PI / 2]) {
+      const bar = new THREE.Mesh(new THREE.PlaneGeometry(R * 3.2, 1.2), mat(0.9));
+      bar.rotation.z = a; predMarker.add(bar);
+    }
+    const beam = new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 1, 16, 1, true).translate(0, 0.5, 0).rotateX(Math.PI / 2), mat(0.35, true));
+    beam.name = 'beam';
+    predMarker.add(beam);
+    predMarker.traverse((o) => { o.renderOrder = 5; o.frustumCulled = false; });
+  }
   predMarker.visible = false;
   scene.add(predMarker);
+  // the predicted flight path from the ship down to that point
+  const PATH_MAX = 1001;
+  const predPathGeo = new THREE.BufferGeometry();
+  predPathGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(PATH_MAX * 3), 3));
+  const predPath = new THREE.Line(predPathGeo, new THREE.LineDashedMaterial({ color: 0xffa040, dashSize: 1, gapSize: 0.6, transparent: true, opacity: 0.9, depthTest: false }));
+  predPath.renderOrder = 5; predPath.frustumCulled = false; predPath.visible = false;
+  scene.add(predPath);
+  const predTag = document.createElement('div');
+  predTag.className = 'pred-tag'; predTag.hidden = true;
+  $('app').appendChild(predTag);
   let pred: SSPrediction | null = null, predT = 0;
   let hsLit = false; // hoverslam autothrottle: engines lit
   const dustFx = new LMModel(); // reuse the LM's dust sheet, scaled up for Raptor exhaust
@@ -508,11 +534,24 @@ export async function starshipMain(opts: StarshipOptions) {
       pred = predictTouchdown(s, { engines: armed ? nSel : 0, throttle: autoThr ? null : SS.minThrottle + (1 - SS.minThrottle) * input.state.throttle }, terrain);
     }
     predMarker.visible = mode === 'manual' && !!pred && !s.touchdown && view !== 'sky';
+    predTag.hidden = !predMarker.visible;
+    predPath.visible = predMarker.visible;
     if (predMarker.visible && pred) {
+      const pa = predPathGeo.attributes.position as THREE.BufferAttribute;
+      const n = Math.min(PATH_MAX, pred.path.length);
+      for (let i = 0; i < n; i++) { const q = frame.dir(tmp.copy(pred.path[i]).sub(origin)); pa.setXYZ(i, q.x, q.y, q.z); }
+      pa.needsUpdate = true;
+      predPathGeo.setDrawRange(0, n);
+      predPath.computeLineDistances();
+      (predPath.material as THREE.LineDashedMaterial).dashSize = Math.max(4, s.v.length() * 0.6);
+      (predPath.material as THREE.LineDashedMaterial).gapSize = Math.max(3, s.v.length() * 0.4);
       predMarker.position.copy(frame.dir(tmp.copy(pred.pos).addScaledVector(pred.pos.clone().normalize(), 0.6).sub(origin)));
       predMarker.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), frame.dir(pred.pos.clone().normalize()).normalize());
-      const d = predMarker.position.length();
-      predMarker.scale.setScalar(Math.max(1, d / 900));
+      // keep it a readable size on screen from any range: the footprint scale up close, growing with distance
+      const d = predMarker.position.distanceTo(camera.position);
+      predMarker.scale.setScalar(Math.max(1, d / 450));
+      const beam = predMarker.getObjectByName('beam')!;
+      beam.scale.set(1.2, 1.2, Math.max(80, d * 0.25) / predMarker.scale.x);
     }
 
     const altPads = s.altitude(terrain);
@@ -589,6 +628,30 @@ export async function starshipMain(opts: StarshipOptions) {
     document.body.classList.toggle('sky', view === 'sky');
 
     terrainR.update(origin, camera.position);
+    if (predMarker.visible && pred) {
+      camera.updateMatrixWorld();
+      // screen tag just above the marker
+      // when the point is off screen the tag rides the screen edge pointing toward it
+      const sp = tmp.copy(predMarker.position).applyMatrix4(camera.matrixWorldInverse);
+      const behind = sp.z > 0;
+      sp.applyMatrix4(camera.projectionMatrix);
+      let x = behind ? -sp.x : sp.x, y = behind ? -sp.y : sp.y;
+      const lim = Math.max(Math.abs(x) / 0.86, Math.abs(y) / 0.78);
+      const edge = behind || lim > 1;
+      if (edge && lim > 0) { x /= Math.max(1, lim); y /= Math.max(1, lim); }
+      const off = pred.pos.distanceTo(siteGround);
+      const arrow = !edge ? '' : Math.abs(x) * 0.78 > Math.abs(y) * 0.86 ? (x > 0 ? ' ▶' : '◀ ') : (y > 0 ? '▲ ' : '▼ ');
+      const txt = `TOUCHDOWN ${off < 1000 ? off.toFixed(0) + ' m' : (off / 1000).toFixed(1) + ' km'} from target · ${pred.t.toFixed(0)} s`;
+      predTag.textContent = arrow === ' ▶' ? txt + arrow : arrow + txt;
+      predTag.classList.toggle('edge', edge);
+      predTag.hidden = false;
+      // keep the whole tag on screen
+      const tw = predTag.offsetWidth, th = predTag.offsetHeight, W = window.innerWidth, H = window.innerHeight;
+      let px = ((x + 1) / 2) * W, py = ((1 - y) / 2) * H - (edge ? th / 2 : th * 1.5);
+      px = Math.min(W - tw / 2 - 8, Math.max(tw / 2 + 8, px)) - tw / 2;
+      py = Math.min(H - th - 8, Math.max(8, py));
+      predTag.style.transform = `translate(${px}px, ${py}px)`;
+    }
     renderer.render(scene, camera);
 
     hudT -= dtReal;
@@ -675,7 +738,7 @@ export async function starshipMain(opts: StarshipOptions) {
   }
 
   frameLoop();
-  (window as any).__sim = { s, g, restart, setMode, setView: (v: View) => setView(v), setEngines, get mode() { return mode; }, camCtl, skyCtl, renderer, terrain, mb };
+  (window as any).__sim = { s, g, restart, setMode, setWarp: (i: number) => { warpI = i; }, predMarker, camera, get pred() { return pred; }, setView: (v: View) => setView(v), setEngines, get mode() { return mode; }, camCtl, skyCtl, renderer, terrain, mb };
 }
 
 function utc(t: number) {

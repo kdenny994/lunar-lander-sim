@@ -307,3 +307,11 @@ body.sky #ss-panel { display: none !important; }
 .ss-engines .eng.tail { background: #3a2a22; color: #e0a080; border-color: #7a5040; }
 @media (max-width: 600px) { .ss-pred { font-size: 11px; } }
 body.cabin3d #window-frame { display: none; }
+
+/* predicted touchdown tag over the ground marker (Starship manual flight) */
+.pred-tag { position: fixed; left: 0; top: 0; z-index: 30; pointer-events: none; white-space: nowrap; font: 600 12px/1.2 system-ui, sans-serif; letter-spacing: 0.04em;
+  color: #1a0f00; background: #ffa040; padding: 3px 7px; border-radius: 4px; box-shadow: 0 1px 6px rgba(0,0,0,0.5); }
+.pred-tag::after { content: ''; position: absolute; left: 50%; bottom: -6px; margin-left: -6px; border: 6px solid transparent; border-bottom: 0; border-top-color: #ffa040; }
+@media (max-width: 600px) { .pred-tag { font-size: 10.5px; } }
+.pred-tag.edge { opacity: 0.85; }
+.pred-tag.edge::after { display: none; }

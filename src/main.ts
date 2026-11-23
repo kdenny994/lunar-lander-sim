@@ -1,3 +1,4 @@
+import { quality, setQuality } from './ui/quality';
 import * as THREE from 'three';
 import { FT, LM, MOON } from './sim/constants';
 import { skyAt, planetsFromMoon, jdUTFromSimTime } from './sim/ephemeris';
@@ -33,7 +34,7 @@ async function apolloMain() {
 
   // ---------- renderer / scene ----------
   // phones and tablets: cap the pixel ratio and shadow resolution to keep frame rate and GPU memory in check
-  const mobile = matchMedia('(pointer: coarse)').matches || /iPhone|iPad|Android/.test(navigator.userAgent);
+  const mobile = quality() === 'low';
   const renderer = new THREE.WebGLRenderer({ antialias: !mobile || window.devicePixelRatio < 2, logarithmicDepthBuffer: true, powerPreference: 'high-performance' });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, mobile ? 1.5 : 2));
   renderer.domElement.addEventListener('webglcontextlost', (e) => { e.preventDefault(); loadMsg('The graphics context was lost (the device reclaimed GPU memory). Reload the page to continue.'); $('loading').hidden = false; });
@@ -55,7 +56,7 @@ async function apolloMain() {
   const earthDirW = skyState.earthDir.clone();
   const sun = new THREE.DirectionalLight(0xfff6ea, 3.2);
   sun.castShadow = true;
-  sun.shadow.mapSize.setScalar(mobile ? 1024 : 2048);
+  sun.shadow.mapSize.setScalar(mobile ? 1024 : 4096);
   sun.shadow.bias = -0.0004;
   sun.shadow.normalBias = 0.05;
   const sc = sun.shadow.camera as THREE.OrthographicCamera;
@@ -75,6 +76,7 @@ async function apolloMain() {
 
   const terrainR = new TerrainRenderer(terrain, frame, `${BASE}/terrain`);
   terrainR.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  terrainR.hiRes = !mobile;
   scene.add(terrainR.group);
   const lm = new LMModel();
   scene.add(lm.body, lm.dustObject);
@@ -599,6 +601,10 @@ function boot() {
   const chooseAgain = () => { location.hash = 'choose'; location.reload(); };
   $('btn-mission').addEventListener('click', chooseAgain);
   $('help-mission').addEventListener('click', chooseAgain);
+  // graphics quality: desktops default to high fidelity, iPhone / iPad to low; switching reloads the mission
+  const qBtn = $('help-quality');
+  qBtn.textContent = `Graphics: ${quality() === 'high' ? 'High' : 'Low'}`;
+  qBtn.addEventListener('click', () => { setQuality(quality() === 'high' ? 'low' : 'high'); location.reload(); });
   const h = location.hash.slice(1);
   let engines = Math.min(3, Math.max(1, Number(store.get('ss-engines')) || 3));
   let manual = store.get('ss-manual') === '1';

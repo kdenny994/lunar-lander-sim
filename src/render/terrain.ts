@@ -58,6 +58,8 @@ export class TerrainRenderer {
   private loader = new THREE.TextureLoader();
   private pendingSiteTex = 0;
   anisotropy = 8;
+  /** high-fidelity: full 0.5 m site imagery everywhere from the start, finer geometry kept further out */
+  hiRes = false;
 
   private baked: boolean;
   private bgUrl: string;
@@ -104,7 +106,7 @@ export class TerrainRenderer {
     const total = this.chunks.length;
     this.pendingSiteTex = this.chunks.filter((c) => c.def.isSite).length;
     await Promise.all(this.chunks.map((c) => new Promise<void>((res) => {
-      const url = c.def.isSite ? c.def.texUrl.replace('/site/', '/site_lo/') : c.def.texUrl;
+      const url = c.def.isSite && !this.hiRes ? c.def.texUrl.replace('/site/', '/site_lo/') : c.def.texUrl;
       this.loader.load(url, (t) => {
         t.colorSpace = THREE.SRGBColorSpace;
         t.anisotropy = this.anisotropy;
@@ -263,7 +265,8 @@ export class TerrainRenderer {
       const p = this.frame.dir(tmp.copy(ch.def.center).sub(origin));
       const dist = Math.max(0, p.distanceTo(camRender) - ch.def.radius);
       if (dist > 400_000) { if (ch.mesh) ch.mesh.visible = false; continue; }
-      let lod = ch.def.lodDist.findIndex((d) => dist < d);
+      const dl = this.hiRes ? dist / 2 : dist;
+      let lod = ch.def.lodDist.findIndex((d) => dl < d);
       if (lod < 0) lod = ch.def.lodDist.length - 1;
       const coarsest = ch.def.steps.length - 1;
       if (!ch.geos[coarsest]) ch.geos[coarsest] = this.buildGeometry(ch.def, ch.def.steps[coarsest]);
@@ -275,13 +278,13 @@ export class TerrainRenderer {
       }
       ch.mesh.visible = true;
       ch.mesh.position.copy(p);
-      if (ch.def.isSite && ch.lo) this.siteHiRes(ch, dist);
+      if (ch.def.isSite && ch.lo && !this.hiRes) this.siteHiRes(ch, dist);
       if (!ch.geos[lod]) want.push({ ch, lod, dist });
       // use the finest available geometry that is not finer than wanted
       let use = lod;
       while (use < coarsest && !ch.geos[use]) use++;
       if (ch.lod !== use) { ch.mesh.geometry = ch.geos[use]!; ch.lod = use; }
-      if (lod > 0 && ch.geos[0] && dist > ch.def.lodDist[0] * 3) { ch.geos[0].dispose(); ch.geos[0] = null; }
+      if (lod > 0 && ch.geos[0] && dl > ch.def.lodDist[0] * 3) { ch.geos[0].dispose(); ch.geos[0] = null; }
     }
     want.sort((a, b) => a.dist - b.dist);
     for (const w of want) {

@@ -21,6 +21,8 @@ export interface SSPrediction {
   /** seconds from now */
   t: number;
   vVert: number; vHorz: number;
+  /** predicted flight path to the touchdown (Moon-fixed, m), about one point a second */
+  path: Vector3[];
 }
 
 const G_MU = MOON.mu;
@@ -65,13 +67,17 @@ export function predictTouchdown(s: SSState, o: SSPredictOptions, terrain: Terra
   const up = new Vector3(), acc = new Vector3();
   let t = 0;
   let lit = s.running > 0;
+  const path: Vector3[] = [r.clone()];
+  let tPath = 0;
   for (let k = 0; k < 6000 && t < maxT; k++) {
     up.copy(r).normalize();
     const { lat, lon, r: rr } = vecToLLR(r);
     const h = rr - (MOON.radius + terrain.heightAt(lat, lon)) - SS.cgAbovePads;
     const vz = v.dot(up);
     if (h <= 0) {
-      return { lat, lon, pos: r.clone().setLength(MOON.radius + terrain.heightAt(lat, lon)), t, vVert: -vz, vHorz: v.clone().addScaledVector(up, -vz).length() };
+      const pos = r.clone().setLength(MOON.radius + terrain.heightAt(lat, lon));
+      path.push(pos.clone());
+      return { lat, lon, pos, t, vVert: -vz, vHorz: v.clone().addScaledVector(up, -vz).length(), path };
     }
     if (vz > 0 && h > 60000) return null; // climbing away: no touchdown with these settings
     let aT = 0;
@@ -89,6 +95,7 @@ export function predictTouchdown(s: SSState, o: SSPredictOptions, terrain: Terra
     v.addScaledVector(acc, dt);
     r.addScaledVector(v, dt);
     t += dt;
+    if (t - tPath >= 1 && path.length < 1000) { path.push(r.clone()); tPath = t; }
   }
   return null;
 }
