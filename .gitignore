@@ -5,3 +5,5 @@ data-raw/wac_tiles
 data-raw/*.npz
 data-raw/*.png*
 data-raw/shackleton
+data-raw/terrain
+data-raw/*.glb
