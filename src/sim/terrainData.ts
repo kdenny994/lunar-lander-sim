@@ -3,8 +3,8 @@
 export interface GridMeta {
   width: number; height: number;
   lon0: number; lat0: number; dlon: number; dlat: number; // centre of sample (0,0) and spacing (deg)
-  /** 'sps': south polar stereographic grid, x = x0 + c dx, y = y0 + r dy (m) */
-  proj?: 'sps'; x0?: number; y0?: number; dx?: number; dy?: number;
+  /** polar grids, x = x0 + c dx, y = y0 + r dy (m): 'spo' south polar orthographic, 'sps' south polar stereographic */
+  proj?: 'spo' | 'sps'; x0?: number; y0?: number; dx?: number; dy?: number;
   scale: number; offset: number;
   source: string;
   [k: string]: unknown;
@@ -22,16 +22,29 @@ export function spsInverse(x: number, y: number) {
   return { lat: -90 + (2 * Math.atan(rho / (2 * R_MOON))) / D2R, lon: Math.atan2(x, y) / D2R };
 }
 
+/** south polar orthographic (sphere): x = R cos(lat) sin(lon), y = R cos(lat) cos(lon) */
+export function spoForward(lat: number, lon: number) {
+  const rho = R_MOON * Math.cos(lat * D2R);
+  return { x: rho * Math.sin(lon * D2R), y: rho * Math.cos(lon * D2R) };
+}
+export function spoInverse(x: number, y: number) {
+  const rho = Math.min(Math.hypot(x, y), R_MOON);
+  return { lat: -Math.acos(rho / R_MOON) / D2R, lon: Math.atan2(x, y) / D2R };
+}
+/** forward/inverse for whichever polar projection a grid uses */
+export function polarForward(proj: GridMeta['proj'], lat: number, lon: number) { return proj === 'sps' ? spsForward(lat, lon) : spoForward(lat, lon); }
+export function polarInverse(proj: GridMeta['proj'], x: number, y: number) { return proj === 'sps' ? spsInverse(x, y) : spoInverse(x, y); }
+
 export class HeightGrid {
   constructor(readonly meta: GridMeta, readonly data: Int16Array) {}
 
-  get polar() { return this.meta.proj === 'sps'; }
+  get polar() { return this.meta.proj === 'sps' || this.meta.proj === 'spo'; }
 
   /** fractional row/col of a lat/lon */
   rc(lat: number, lon: number) {
     const m = this.meta;
-    if (m.proj === 'sps') {
-      const p = spsForward(lat, lon);
+    if (this.polar) {
+      const p = polarForward(m.proj, lat, lon);
       return { r: (p.y - m.y0!) / m.dy!, c: (p.x - m.x0!) / m.dx! };
     }
     return { r: (lat - m.lat0) / m.dlat, c: (lon - m.lon0) / m.dlon };
@@ -39,14 +52,14 @@ export class HeightGrid {
 
   latLon(r: number, c: number) {
     const m = this.meta;
-    if (m.proj === 'sps') return spsInverse(m.x0! + c * m.dx!, m.y0! + r * m.dy!);
+    if (this.polar) return polarInverse(m.proj, m.x0! + c * m.dx!, m.y0! + r * m.dy!);
     return { lat: m.lat0 + r * m.dlat, lon: m.lon0 + c * m.dlon };
   }
 
   /** planar coordinates used for the "site inside corridor" cut-out: (lon - 23, lat) deg, or (x, y) km when polar */
   rect(r: number, c: number): [number, number] {
     const m = this.meta;
-    if (m.proj === 'sps') return [(m.x0! + c * m.dx!) / 1000, (m.y0! + r * m.dy!) / 1000];
+    if (this.polar) return [(m.x0! + c * m.dx!) / 1000, (m.y0! + r * m.dy!) / 1000];
     return [m.lon0 + c * m.dlon - 23, m.lat0 + r * m.dlat];
   }
   rectBounds() {

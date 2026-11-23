@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { MOON } from '../sim/constants';
 import { llrToVec, type RenderFrame } from '../sim/geo';
-import { spsForward, type HeightGrid, type TerrainData } from '../sim/terrainData';
+import { polarForward, spoForward, type HeightGrid, type TerrainData } from '../sim/terrainData';
 
 interface ChunkDef {
   grid: HeightGrid;
@@ -18,6 +18,7 @@ interface ChunkDef {
 type Vector3d = THREE.Vector3;
 interface ChunkRec { def: ChunkDef; mesh: THREE.Mesh | null; geos: (THREE.BufferGeometry | null)[]; lod: number; mat: THREE.MeshLambertMaterial; lo?: THREE.Texture; hi?: THREE.Texture | 'loading' }
 
+const D2R = Math.PI / 180;
 const RECT_SHADER_VERT_DECL = `
 attribute vec2 aLL;
 varying vec2 vLL;
@@ -53,7 +54,7 @@ export class TerrainRenderer {
   readonly group = new THREE.Group();
   private chunks: ChunkRec[] = [];
   private rect = { uRect: { value: new THREE.Vector4() }, uDiscard: { value: 0 } };
-  private background: THREE.Mesh;
+  private background: THREE.Object3D;
   private loader = new THREE.TextureLoader();
   private pendingSiteTex = 0;
   anisotropy = 8;
@@ -178,50 +179,76 @@ export class TerrainRenderer {
     return g;
   }
 
-  private makeBackground(): THREE.Mesh {
-    // whole Moon at 1/4 deg, WAC global mosaic; hidden inside the corridor footprint
-    const NLON = 720, NLAT = 360;
+  private makeBackground(): THREE.Object3D {
+    // whole Moon at 1/4 deg from the WAC global (equirectangular) mosaic; hidden inside the corridor footprint.
+    // Polar sites: the equirectangular map pinches into radial streaks near the pole, so the polar cap is drawn
+    // instead from an orthographic image centred on the pole, and the global sphere stops at its edge.
     const polar = this.data.corridor.polar;
+    const proj = this.data.corridor.meta.proj;
+    // orthographic images, innermost first; each one covers the latitudes down to the next one's edge
+    const caps = polar ? ((((this.data.corridor.meta as any).polarCaps ?? []) as { url: string; half: number }[]).slice().sort((a, b) => a.half - b.half)) : [];
     const R = MOON.radius - (polar ? 4600 : 2600);
-    const pos = new Float32Array((NLON + 1) * (NLAT + 1) * 3);
-    const uv = new Float32Array((NLON + 1) * (NLAT + 1) * 2);
-    const ll = new Float32Array((NLON + 1) * (NLAT + 1) * 2);
-    const v = new THREE.Vector3();
-    let k = 0;
-    for (let i = 0; i <= NLAT; i++) {
-      const lat = 90 - (180 * i) / NLAT;
-      for (let j = 0; j <= NLON; j++) {
-        const lon = -180 + (360 * j) / NLON;
-        llrToVec(lat, lon, R, v);
-        pos.set([v.x, v.y, v.z], k * 3);
-        uv.set([j / NLON, 1 - i / NLAT], k * 2);
-        if (polar) {
-          const p = spsForward(Math.min(lat, 60), lon);
-          ll.set([p.x / 1000, p.y / 1000], k * 2);
-        } else ll.set([lon - 23, lat], k * 2);
-        k++;
-      }
-    }
-    const idx: number[] = [];
-    for (let i = 0; i < NLAT; i++) for (let j = 0; j < NLON; j++) {
-      const a = i * (NLON + 1) + j, b = a + 1, c = a + NLON + 1, d = c + 1;
-      idx.push(a, c, b, b, c, d);
-    }
-    const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-    g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
-    g.setAttribute('aLL', new THREE.BufferAttribute(ll, 2));
-    g.setIndex(idx);
-    g.computeVertexNormals();
+    const edgeLat = (half: number) => -Math.acos(Math.min(1, (half * 0.98) / MOON.radius)) / D2R; // just inside the image edge
+    const capLat = caps.length ? edgeLat(caps[caps.length - 1].half) : -90;
     const cb = this.data.corridor.rectBounds();
     const e = polar ? 0.3 : 0.01;
     const rect = { uRect: { value: new THREE.Vector4(cb.u0 + e, cb.u1 - e, cb.v0 + e, cb.v1 - e) }, uDiscard: { value: 1 } };
-    const mat = makeMaterial(rect, this.baked ? 0.9 : 1.35, this.baked);
-    this.loader.load(this.bgUrl, (t) => { t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = this.anisotropy; mat.map = t; mat.needsUpdate = true; });
-    const mesh = new THREE.Mesh(g, mat);
-    mesh.frustumCulled = false;
-    mesh.receiveShadow = false;
-    return mesh;
+    const aLL = (lat: number, lon: number): [number, number] => {
+      if (!polar) return [lon - 23, lat];
+      const p = polarForward(proj, Math.min(lat, 0), lon);
+      return [p.x / 1000, p.y / 1000];
+    };
+    // rows: lat from latTop to latBot; uv from `uvOf`
+    const sphere = (latTop: number, latBot: number, NLAT: number, NLON: number, uvOf: (lat: number, lon: number, j: number) => [number, number], url: string, gain: number) => {
+      const n = (NLON + 1) * (NLAT + 1);
+      const pos = new Float32Array(n * 3), uv = new Float32Array(n * 2), ll = new Float32Array(n * 2);
+      const v = new THREE.Vector3();
+      let k = 0;
+      for (let i = 0; i <= NLAT; i++) {
+        const lat = latTop + ((latBot - latTop) * i) / NLAT;
+        for (let j = 0; j <= NLON; j++) {
+          const lon = -180 + (360 * j) / NLON;
+          llrToVec(lat, lon, R, v);
+          pos.set([v.x, v.y, v.z], k * 3);
+          uv.set(uvOf(lat, lon, j), k * 2);
+          ll.set(aLL(lat, lon), k * 2);
+          k++;
+        }
+      }
+      const idx: number[] = [];
+      for (let i = 0; i < NLAT; i++) for (let j = 0; j < NLON; j++) {
+        const a = i * (NLON + 1) + j, b = a + 1, c = a + NLON + 1, d = c + 1;
+        idx.push(a, c, b, b, c, d);
+      }
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+      g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+      g.setAttribute('aLL', new THREE.BufferAttribute(ll, 2));
+      g.setIndex(idx);
+      g.computeVertexNormals();
+      const mat = makeMaterial(rect, gain, this.baked);
+      this.loader.load(url, (t) => { t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = this.anisotropy; mat.map = t; mat.needsUpdate = true; });
+      const mesh = new THREE.Mesh(g, mat);
+      mesh.frustumCulled = false;
+      mesh.receiveShadow = false;
+      return mesh;
+    };
+    const gain = this.baked ? 0.9 : 1.35;
+    const nlat = Math.max(8, Math.round(((90 - capLat) / 180) * 360));
+    const globe = sphere(90, capLat, nlat, 720, (lat, _lon, j) => [j / 720, (lat + 90) / 180], this.bgUrl, gain);
+    if (!caps.length) return globe;
+    const group = new THREE.Group();
+    group.add(globe);
+    // image u = (x + half) / 2 half, v = (y + half) / 2 half (texture v = 1 is the top row, y = +half)
+    caps.forEach((cap, i) => {
+      const top = edgeLat(cap.half), bot = i === 0 ? -90 : edgeLat(caps[i - 1].half);
+      const rows = Math.max(16, Math.round((bot - top) / -0.1));
+      group.add(sphere(top, bot, rows, 720, (lat, lon) => {
+        const p = spoForward(lat, lon);
+        return [(p.x + cap.half) / (2 * cap.half), (p.y + cap.half) / (2 * cap.half)];
+      }, `${this.base}/${cap.url}`, 1.0));
+    });
+    return group;
   }
 
   /** Position chunks relative to the floating origin and choose LODs. Call every frame. */

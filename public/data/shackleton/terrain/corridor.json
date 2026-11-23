@@ -1,7 +1,7 @@
 {
  "width": 481,
  "height": 1641,
- "proj": "sps",
+ "proj": "spo",
  "x0": -24000.0,
  "y0": 14000.0,
  "dx": 100.0,
@@ -12,5 +12,15 @@
  "chunkRows": 7,
  "chunkCols": 2,
  "texSize": 1024,
- "source": "Heights: LOLA 5 m south-pole DEM (Barker et al. 2021) to 100 km from the pole, LOLA 118 m global DEM beyond (USGS Astrogeology). Imagery: LROC NAC south-pole controlled mosaic (NASA/GSFC/ASU, USGS)."
+ "source": "Heights: LOLA 5 m south-pole DEM (Barker et al. 2021) to 100 km from the pole, LOLA 118 m global DEM beyond (USGS Astrogeology). Imagery: LROC NAC south-pole controlled mosaic (NASA/GSFC/ASU, USGS). Reprojected to south polar orthographic.",
+ "polarCaps": [
+  {
+   "url": "polar_cap.jpg",
+   "half": 190000.0
+  },
+  {
+   "url": "polar_ring.jpg",
+   "half": 800000.0
+  }
+ ]
 }

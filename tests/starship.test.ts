@@ -1,7 +1,7 @@
 // Headless Starship landings at the Shackleton rim with 3, 2 and 1 engines for braking.
 import { readFileSync } from 'node:fs';
 import { Vector3 } from 'three';
-import { HeightGrid, TerrainData, decodeHeightPng, spsInverse } from '../src/sim/terrainData';
+import { HeightGrid, TerrainData, decodeHeightPng, polarInverse } from '../src/sim/terrainData';
 import { SS, SSState, stepStarship, massBudget, descentOrbitState, ascentDvAvailable } from '../src/sim/starship';
 import { StarshipGuidance } from '../src/sim/starshipGuidance';
 import { llrToVec } from '../src/sim/geo';
@@ -18,10 +18,10 @@ const check = (name: string, ok: boolean, info: string) => { console.log(`${ok ?
 
 const terrain = new TerrainData(await load('corridor'), await load('site'));
 const site = terrain.site.meta as any;
-const sll = spsInverse(site.siteX, site.siteY);
+const sll = polarInverse(site.proj, site.siteX, site.siteY);
 const siteGround = llrToVec(sll.lat, sll.lon, MOON.radius + terrain.heightAt(sll.lat, sll.lon));
-const peri = spsInverse(site.siteX, site.siteY - 110000);
-const from = spsInverse(site.siteX, site.siteY - 50000);
+const peri = polarInverse(site.proj, site.siteX, site.siteY - 110000);
+const from = polarInverse(site.proj, site.siteX, site.siteY - 50000);
 const fromV = llrToVec(from.lat, from.lon, MOON.radius);
 const mb = massBudget();
 console.log('budget', JSON.stringify(Object.fromEntries(Object.entries(mb).map(([k, v]) => [k, Math.round(v as number)]))));
@@ -40,8 +40,8 @@ const cases: Case[] = [
 ];
 for (const k of cases) {
   const s = new SSState();
-  const periK = k.cross ? spsInverse(site.siteX + k.cross, site.siteY - 110000) : peri;
-  const sllK = k.cross ? spsInverse(site.siteX + k.cross, site.siteY) : sll;
+  const periK = k.cross ? polarInverse(site.proj, site.siteX + k.cross, site.siteY - 110000) : peri;
+  const sllK = k.cross ? polarInverse(site.proj, site.siteX + k.cross, site.siteY) : sll;
   descentOrbitState(s, periK, sllK, 260000);
   s.prop = (mb.pdiMass * (k.massScale ?? 1)) - SS.dryMass - SS.payload - mb.residual; s.residual = mb.residual;
   const m0 = s.mass;

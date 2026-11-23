@@ -1,7 +1,7 @@
 {
  "width": 1201,
  "height": 1201,
- "proj": "sps",
+ "proj": "spo",
  "x0": -5757.5,
  "y0": -3252.5,
  "dx": 5.0,
@@ -12,7 +12,7 @@
  "chunkRows": 3,
  "chunkCols": 3,
  "texSize": 1024,
- "source": "Heights: LOLA 5 m/px south-pole DEM (Barker et al. 2021, NASA GSFC). Imagery: LROC NAC south-pole controlled mosaic, 1 m/px (NASA/GSFC/ASU, USGS).",
+ "source": "Heights: LOLA 5 m/px south-pole DEM (Barker et al. 2021, NASA GSFC). Imagery: LROC NAC south-pole controlled mosaic, 1 m/px (NASA/GSFC/ASU, USGS). Reprojected to south polar orthographic.",
  "siteX": -2757.5,
  "siteY": -6252.5
 }

@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { MOON } from './sim/constants';
 import { skyAtJD, planetsFromMoon, type SkyState } from './sim/ephemeris';
 import { RenderFrame, enuAt, llrToVec, vecToLLR } from './sim/geo';
-import { TerrainData, spsInverse } from './sim/terrainData';
+import { TerrainData, polarInverse } from './sim/terrainData';
 import { SS, SSState, stepStarship, massBudget, descentOrbitState, ascentDvAvailable, type SSControls } from './sim/starship';
 import { StarshipGuidance, SSManualAP } from './sim/starshipGuidance';
 import { TerrainRenderer } from './render/terrain';
@@ -38,11 +38,11 @@ export async function starshipMain(opts: StarshipOptions) {
   loadMsg('Loading Shackleton rim terrain…', 0.03);
   const terrain = await TerrainData.load(TBASE, (m) => loadMsg(m, 0.06));
   const meta = terrain.site.meta as any;
-  const sll = spsInverse(meta.siteX, meta.siteY);
+  const sll = polarInverse(meta.proj, meta.siteX, meta.siteY);
   const siteH = terrain.heightAt(sll.lat, sll.lon);
   const siteGround = llrToVec(sll.lat, sll.lon, MOON.radius + siteH);
-  const peri = spsInverse(meta.siteX, meta.siteY - 110000);
-  const from = spsInverse(meta.siteX, meta.siteY - 50000);
+  const peri = polarInverse(meta.proj, meta.siteX, meta.siteY - 110000);
+  const from = polarInverse(meta.proj, meta.siteX, meta.siteY - 50000);
   const fromV = llrToVec(from.lat, from.lon, MOON.radius);
   const frame = new RenderFrame(sll.lat, sll.lon);
   const mb = massBudget();
@@ -146,6 +146,7 @@ export async function starshipMain(opts: StarshipOptions) {
   }
 
   let lastPhase: string = '';
+  let restartT = 0;
   function restart(point: StartPoint, manual: boolean) {
     resetState();
     fastForward(point);
@@ -153,6 +154,7 @@ export async function starshipMain(opts: StarshipOptions) {
     $('result').hidden = true;
     clearEvents();
     lastPhase = g.phase;
+    restartT = s.t;
     nSel = g.phase === 'landing' ? g.landingEngines : g.brakingEngines;
     armed = true;
     setMode(manual ? 'manual' : 'auto', true);
@@ -435,7 +437,7 @@ export async function starshipMain(opts: StarshipOptions) {
     if (mode === 'auto' && g.phase !== lastPhase) {
       if (g.phase === 'braking') event(`Ignition: braking burn on ${g.brakingEngines} Raptor${g.brakingEngines > 1 ? 's' : ''}`);
       if (g.phase === 'landing') event('Pitch-up to vertical for the landing burn');
-      if (g.phase === 'coast' && lastPhase === 'braking') event('Shutdown: coasting to a later ignition');
+      if (g.phase === 'coast' && lastPhase === 'braking' && s.t - restartT > 2) event('Shutdown: coasting to a later ignition');
       lastPhase = g.phase;
     }
     if (s.running !== lastRunning) {
