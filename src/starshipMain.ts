@@ -1,6 +1,7 @@
 // Starship HLS mode: powered descent from a 600 x 15 km orbit to the rim of Shackleton crater.
 import { quality } from './ui/quality';
 import * as THREE from 'three';
+import { createRenderer, shadowSize, anisotropy, fitPixelRatio, warmGpu } from './render/gpu';
 import { MOON } from './sim/constants';
 import { skyAtJD, planetsFromMoon, type SkyState } from './sim/ephemeris';
 import { RenderFrame, enuAt, llrToVec, vecToLLR } from './sim/geo';
@@ -52,9 +53,7 @@ export async function starshipMain(opts: StarshipOptions) {
 
   // ---------- renderer / scene ----------
   const mobile = quality() === 'low';
-  const renderer = new THREE.WebGLRenderer({ antialias: !mobile || window.devicePixelRatio < 2, logarithmicDepthBuffer: true, powerPreference: 'high-performance' });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, mobile ? 1.5 : 2));
-  renderer.domElement.addEventListener('webglcontextlost', (e) => { e.preventDefault(); loadMsg('The graphics context was lost (the device reclaimed GPU memory). Reload the page to continue.'); $('loading').hidden = false; });
+  const renderer = createRenderer({ low: mobile, message: (m) => loadMsg(m) });
   for (const ev of ['gesturestart', 'gesturechange', 'dblclick']) document.addEventListener(ev, (e) => e.preventDefault(), { passive: false });
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -71,7 +70,7 @@ export async function starshipMain(opts: StarshipOptions) {
   const sunDirW = skyState.sunDir.clone(), earthDirW = skyState.earthDir.clone();
   const sun = new THREE.DirectionalLight(0xfff6ea, 3.2);
   sun.castShadow = true;
-  sun.shadow.mapSize.setScalar(mobile ? 1024 : 4096);
+  sun.shadow.mapSize.setScalar(shadowSize(renderer, mobile ? 1024 : 4096));
   sun.shadow.bias = -0.0004;
   sun.shadow.normalBias = 0.08;
   const sc = sun.shadow.camera as THREE.OrthographicCamera;
@@ -89,7 +88,7 @@ export async function starshipMain(opts: StarshipOptions) {
   scene.add(sky.group);
 
   const terrainR = new TerrainRenderer(terrain, frame, TBASE, { baked: true, bgUrl: `${BASE}/terrain/moon_global.jpg` });
-  terrainR.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  terrainR.anisotropy = anisotropy(renderer);
   terrainR.hiRes = !mobile;
   scene.add(terrainR.group);
   const ship = new StarshipModel();
@@ -371,7 +370,7 @@ export async function starshipMain(opts: StarshipOptions) {
     else camCtl.dist = Math.min(30000, Math.max(40, camCtl.dist * Math.exp(e.deltaY * 0.001)));
     e.preventDefault();
   }, { passive: false });
-  const onResize = () => { renderer.setSize(window.innerWidth, window.innerHeight); camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix(); };
+  const onResize = () => { renderer.setPixelRatio(fitPixelRatio(mobile)); renderer.setSize(window.innerWidth, window.innerHeight); camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix(); };
   window.addEventListener('resize', onResize);
   window.visualViewport?.addEventListener('resize', onResize);
   window.addEventListener('orientationchange', () => setTimeout(onResize, 300));
@@ -462,6 +461,8 @@ export async function starshipMain(opts: StarshipOptions) {
   // ---------- loop ----------
   loadMsg('Building terrain…', 0.95);
   restart('orbit', opts.manual);
+  loadMsg('Preparing graphics…', 0.96);
+  await warmGpu(renderer, scene, camera, (f) => loadMsg('Preparing graphics…', 0.96 + 0.04 * f));
   $('loading').hidden = true;
 
   const clock = new THREE.Clock();
