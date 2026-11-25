@@ -1,5 +1,6 @@
 import { quality, setQuality } from './ui/quality';
 import * as THREE from 'three';
+import { createRenderer, shadowSize, anisotropy, fitPixelRatio, warmGpu, GpuError } from './render/gpu';
 import { FT, LM, MOON } from './sim/constants';
 import { skyAt, planetsFromMoon, jdUTFromSimTime } from './sim/ephemeris';
 import { RenderFrame, enuAt, llrToVec, vecToLLR } from './sim/geo';
@@ -35,9 +36,7 @@ async function apolloMain() {
   // ---------- renderer / scene ----------
   // phones and tablets: cap the pixel ratio and shadow resolution to keep frame rate and GPU memory in check
   const mobile = quality() === 'low';
-  const renderer = new THREE.WebGLRenderer({ antialias: !mobile || window.devicePixelRatio < 2, logarithmicDepthBuffer: true, powerPreference: 'high-performance' });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, mobile ? 1.5 : 2));
-  renderer.domElement.addEventListener('webglcontextlost', (e) => { e.preventDefault(); loadMsg('The graphics context was lost (the device reclaimed GPU memory). Reload the page to continue.'); $('loading').hidden = false; });
+  const renderer = createRenderer({ low: mobile, message: (m) => loadMsg(m) });
   for (const ev of ['gesturestart', 'gesturechange', 'dblclick']) document.addEventListener(ev, (e) => e.preventDefault(), { passive: false });
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -56,7 +55,7 @@ async function apolloMain() {
   const earthDirW = skyState.earthDir.clone();
   const sun = new THREE.DirectionalLight(0xfff6ea, 3.2);
   sun.castShadow = true;
-  sun.shadow.mapSize.setScalar(mobile ? 1024 : 4096);
+  sun.shadow.mapSize.setScalar(shadowSize(renderer, mobile ? 1024 : 4096));
   sun.shadow.bias = -0.0004;
   sun.shadow.normalBias = 0.05;
   const sc = sun.shadow.camera as THREE.OrthographicCamera;
@@ -75,7 +74,7 @@ async function apolloMain() {
   scene.add(sky.group);
 
   const terrainR = new TerrainRenderer(terrain, frame, `${BASE}/terrain`);
-  terrainR.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  terrainR.anisotropy = anisotropy(renderer);
   terrainR.hiRes = !mobile;
   scene.add(terrainR.group);
   const lm = new LMModel();
@@ -263,6 +262,7 @@ async function apolloMain() {
   renderer.domElement.addEventListener('pointercancel', up);
   renderer.domElement.addEventListener('wheel', (e) => { if (view === 'sky') { skyCtl.fov = Math.min(100, Math.max(2, skyCtl.fov * Math.exp(e.deltaY * 0.001))); e.preventDefault(); return; } camCtl.dist = Math.min(5000, Math.max(8, camCtl.dist * Math.exp(e.deltaY * 0.001))); e.preventDefault(); }, { passive: false });
   const onResize = () => {
+    renderer.setPixelRatio(fitPixelRatio(mobile));
     renderer.setSize(window.innerWidth, window.innerHeight);
     camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix();
   };
@@ -275,6 +275,8 @@ async function apolloMain() {
   replay.sample(0, rs);
   origin.copy(rs.r);
   terrainR.warm(origin, 3);
+  loadMsg('Preparing graphics…', 0.96);
+  await warmGpu(renderer, scene, camera, (f) => loadMsg('Preparing graphics…', 0.96 + 0.04 * f));
   $('loading').hidden = true;
   hud.resetEvents(0);
   hud.setMode('replay', dap.throttleMode);
@@ -583,10 +585,19 @@ const ENG_NOTES: Record<number, string> = {
   1: 'One Raptor: 2.9 MN on a 450 t ship, so ignition comes about 320 km out and the burn takes about 7 minutes. Switching down to one engine mid-burn makes the guidance land long, downrange of the planned site.',
 };
 
+/** A load that throws must not leave the loading bar sitting there: say what failed and offer a way out. */
+function showLoadError(e: any) {
+  console.error(e);
+  $('loading').hidden = false;
+  loadMsg(e instanceof GpuError ? e.message : `Failed to start: ${e?.message ?? e}`);
+  $('ld-actions').hidden = false;
+  $('ld-light').hidden = quality() === 'low' || e instanceof GpuError;
+}
+
 function startMission(m: Mission, ss?: { engines: number; manual: boolean }) {
   $('mission').hidden = true;
   $('loading').hidden = false;
-  const fail = (e: any) => { console.error(e); loadMsg(`Failed to start: ${e?.message ?? e}`); };
+  const fail = (e: any) => showLoadError(e);
   if (m === 'starship') {
     document.body.classList.add('ss');
     $('loading').querySelector('.ld-title')!.textContent = 'Starship HLS · Shackleton';
@@ -597,6 +608,12 @@ function startMission(m: Mission, ss?: { engines: number; manual: boolean }) {
 }
 
 function boot() {
+  $('ld-reload').addEventListener('click', () => location.reload());
+  $('ld-light').addEventListener('click', () => { setQuality('low'); location.reload(); });
+  // errors thrown outside the mission's promise chain (texture callbacks, model parsing) while still loading
+  const onLoadErr = (e: unknown) => { if (!$('loading').hidden && $('ld-actions').hidden) showLoadError(e); };
+  window.addEventListener('error', (ev) => onLoadErr(ev.error ?? ev.message));
+  window.addEventListener('unhandledrejection', (ev) => onLoadErr(ev.reason));
   $('padmap').innerHTML = XBOX_LAYOUT.map(([b, f]) => `<tr><td>${b}</td><td>${f}</td></tr>`).join('');
   const chooseAgain = () => { location.hash = 'choose'; location.reload(); };
   $('btn-mission').addEventListener('click', chooseAgain);
